@@ -14,20 +14,24 @@ const express = require('express')
 const router = express.Router()
 const { query } = require('../db')
 const { ok, asyncHandler } = require('../utils/helpers')
-const { auth, isViewAll } = require('../middleware/auth')
+const { auth } = require('../middleware/auth')
 
 router.use(auth)
 
 /**
  * 普通表（todo / month_goal / project 等）的个人范围条件，只有 user_id 一个维度。
- * 管理员/审计员带 all=1 时返回空串；注意入参已由内部拼接，不适用于带用户输入的字段。
+ *
+ * 这里是「个人看板」，**不做任何角色例外**：即便当前账号是管理员或审计员，
+ * 也只看自己名下的待办、目标与项目。想看全公司请走 /api/analytics/*（团队运营分析），
+ * 两边职责分开，避免管理员在个人看板上误把公司总量当成自己的量。
+ *
+ * 注意：返回的是拼接好的 SQL 片段，uid 来自 JWT 解出的数字，不是用户输入。
  *
  * @param {import('express').Request} req
- * @returns {string} 形如 `AND user_id = 3`，无限制时为空串
+ * @returns {string} 形如 `AND user_id = 3`
  */
 function scope(req) {
-  if (isViewAll(req.user.role) && req.query.all === '1') return ''
-  return `AND user_id = ${req.user.user_id}`
+  return `AND user_id = ${Number(req.user.user_id)}`
 }
 
 // 工单口径：自己提的 + 指派/抢单给自己的。
@@ -36,13 +40,27 @@ function scope(req) {
  * 工单专用范围条件：自己提的 + 指派/抢单给自己的，两个维度都要 OR 上。
  * 只按 user_id 过滤会把「别人报、自己处理」的单漏掉，完成量就永远偏低。
  *
+ * 与 scope() 一样不做角色例外：个人看板恒定只统计本人相关的工单，
+ * 全公司口径只在团队运营分析里出现。
+ *
  * @param {import('express').Request} req
  * @returns {{sql: string, params: number[]}}
  */
 function ticketScope(req) {
-  if (isViewAll(req.user.role) && req.query.all === '1') return { sql: '', params: [] }
   const uid = Number(req.user.user_id)
   return { sql: 'AND (user_id = ? OR assignee_id = ?)', params: [uid, uid] }
+}
+
+/**
+ * 与 ticketScope 同义的字符串版本，供无法传参的拼接式 SQL（如一条 SELECT 里多个子查询）使用。
+ * uid 取自 JWT 的数字，直接内插不会引入注入风险。
+ *
+ * @param {import('express').Request} req
+ * @returns {string}
+ */
+function ticketScopeSql(req) {
+  const uid = Number(req.user.user_id)
+  return `AND (user_id = ${uid} OR assignee_id = ${uid})`
 }
 
 function pad2(n) { return String(n).padStart(2, '0') }
@@ -51,22 +69,23 @@ function ymOf(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}` }
 // 指标卡片 + 今日工单 + 未完成待办 + 目标进度
 /**
  * 首页主看板：一次返回指标卡、今日工单、今日待办、本月目标、到期项目五块数据。
- * 权限：登录即可；管理员/审计员带 all=1 时看全公司，否则只看自己（scope / ticketScope）。
+ * 权限：登录即可，**恒定只看本人**（连同管理员/审计员也一样，全公司口径在团队运营分析里）。
  * 口径：今日/本周/本月受理量按 happen_time，平均处理时长只统计「本月已完成且有完整起止」的单；
  *      周环比 = 本周 - 上周，月环比 = 本月 - 上月；目标进度 = 已完成目标数 / 目标总数。
  *
- * @param {import('express').Request} req query.all=1 时管理员看全员
+ * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 router.get('/', asyncHandler(async (req, res) => {
   const sc = scope(req)
-  // 工单类子查询单独留一个变量：目前与 sc 同源，将来若两类表隔离规则不同可以就地改
-  const scT = scope(req, true)
+  // 工单子查询用「本人提的 + 指派给自己的」口径，与 /overview 保持一致，
+  // 否则「别人报、自己处理」的单不会出现在今日工单里
+  const scT = ticketScopeSql(req)
   const cur = `SELECT
       (SELECT COUNT(*) FROM ticket WHERE DATE(happen_time)=CURDATE() ${scT}) AS today_ticket,
       (SELECT COUNT(*) FROM ticket WHERE DATE(happen_time)=CURDATE() AND status='done' ${scT}) AS today_done,
-      (SELECT COUNT(*) FROM todo WHERE plan_date=CURDATE() AND is_finish=0 ${sc.replace(/user_id/g,'user_id')}) AS today_todo,
+      (SELECT COUNT(*) FROM todo WHERE plan_date=CURDATE() AND is_finish=0 ${sc}) AS today_todo,
       (SELECT COUNT(*) FROM ticket WHERE YEARWEEK(happen_time,1)=YEARWEEK(CURDATE(),1) ${scT}) AS week_ticket,
       (SELECT COUNT(*) FROM ticket WHERE YEARWEEK(happen_time,1)=YEARWEEK(CURDATE(),1)-1 ${scT}) AS last_week_ticket,
       (SELECT COUNT(*) FROM ticket WHERE DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') ${scT}) AS month_ticket,
@@ -116,7 +135,7 @@ router.get('/', asyncHandler(async (req, res) => {
 // 扩展数据（故障 / 巡检 / SLA / 满意度 / 指派给我）：单独一个接口，首页按需加载，失败不影响主看板
 /**
  * 看板扩展块：本月故障、SLA 超期与临期、满意度、今日是否已巡检、指派给我未完成数。
- * 权限：登录即可；all=1 时故障与工单类指标看全公司，巡检与「指派给我」恒为本人。
+ * 权限：登录即可，**恒定只看本人**（故障与工单类指标按「本人提的 + 指派给自己的」过滤）。
  * 口径：SLA soon 取未来 4 小时内到期且未完成的单，用来提示「快超时了」；满意度不限周期。
  *
  * @param {import('express').Request} req
@@ -125,24 +144,23 @@ router.get('/', asyncHandler(async (req, res) => {
  */
 router.get('/extra', asyncHandler(async (req, res) => {
   const uid = req.user.user_id
-  const viewAll = isViewAll(req.user.role) && req.query.all === '1'
-  const ticketScope = viewAll ? '' : `AND (user_id = ${uid} OR assignee_id = ${uid})`
+  const ticketCond = `AND (user_id = ${uid} OR assignee_id = ${uid})`
 
   const incident = await query(
     `SELECT COUNT(*) AS total, SUM(status='ongoing') AS ongoing,
             SUM(level IN ('P1','P2')) AS serious
-     FROM incident WHERE DATE_FORMAT(start_time,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m') ${viewAll ? '' : `AND user_id = ${uid}`}`
+     FROM incident WHERE DATE_FORMAT(start_time,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m') AND user_id = ${uid}`
   )
   const sla = await query(
     `SELECT
        SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()) AS overdue,
        SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due >= NOW()
            AND sla_resolve_due < DATE_ADD(NOW(), INTERVAL 4 HOUR)) AS soon
-     FROM ticket WHERE 1=1 ${ticketScope}`
+     FROM ticket WHERE 1=1 ${ticketCond}`
   )
   const satisfy = await query(
     `SELECT ROUND(AVG(satisfy_score), 2) AS avg_score, COUNT(*) AS cnt
-     FROM ticket WHERE satisfy_score IS NOT NULL ${ticketScope}`
+     FROM ticket WHERE satisfy_score IS NOT NULL ${ticketCond}`
   )
   const insp = await query(
     'SELECT COUNT(*) AS cnt FROM inspection WHERE user_id = ? AND insp_date = CURDATE()', [uid]
@@ -219,10 +237,10 @@ router.get('/distribution', asyncHandler(async (req, res) => {
   ok(res, { problemType: pt, appSystem: as, range })
 }))
 
-// 汇总分析：上月 + 本年度（个人看板用，管理员带 all=1 则为全公司）
+// 汇总分析：上月 + 本年度（个人看板用，恒定只统计本人）
 /**
  * 汇总分析：上月与本月的月度指标、环比、本年度 12 个月走势、上月问题类别 TOP8。
- * 权限：登录即可，管理员/审计员带 all=1 看全公司。
+ * 权限：登录即可，**恒定只看本人**（不做管理员例外）。
  * 口径：受理量按 happen_time、完成量按 finish_time，跨月的单两边都算，所以「上月×本月」允许出现
  *      本月完成里含上月受理的单；完成率分母仍是本期受理。年度平均时长按「有数据的月份」取平均，
  *      空月份不进分母，避免被 0 摊薄。
@@ -358,7 +376,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
 // =============================================================================
 //  整页看板（时间维度驱动）
 //  -----------------------------------------------------------------------------
-//  GET /api/dashboard/overview?range=today|week|month|last_month|year&all=1
+//  GET /api/dashboard/overview?range=today|week|month|last_month|year
 //  一次返回整页所需数据，前端切换维度时整页跟着刷新：
 //    metrics      本期受理/完成/完成率/平均时长/超期未完成/满意度 + 上一周期对比
 //    trend        按维度自动选择粒度：今日→按小时，周/月→按天，本年→按月
@@ -553,12 +571,12 @@ async function trendOf(start, end, unit, sc) {
 
 /**
  * 整页看板总入口：按 range 一次返回指标、环比、趋势、分布、类别 TOP8、最新工单与右侧待办块。
- * 权限：登录即可，管理员/审计员带 all=1 看全公司。
+ * 权限：登录即可，**恒定只看本人**（不做管理员例外）。
  * 口径：受理按 happen_time、完成按 finish_time；今日按小时分 24 桶，周/月/上月按天，本年按月，
  *      空桶补 0；环比跟「上一个同长度周期」比（本月↔上月、本年↔去年），日期类给绝对差，
  *      平均时长给差且两端都有值才算，否则返回 null 让前端显示「—」。
  *
- * @param {import('express').Request} req query.range、query.all
+ * @param {import('express').Request} req query.range
  * @param {import('express').Response} res
  * @returns {Promise<void>}
  */

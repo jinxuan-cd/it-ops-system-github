@@ -3,7 +3,7 @@
   总览指标、人员维度分析、超期未完成工单滚动列表
 
   作者：锦轩 (JinXuan) <2686389727@qq.com>
-  创建：2026-10-29　　版本：1.2.1
+  创建：2026-10-29　　版本：1.2.2
   版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
   许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
         其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
@@ -233,6 +233,7 @@
             <h4 class="it-section-title" style="margin:0">超期未闭环工单</h4>
             <el-tag v-if="overdue.total" size="small" type="danger">{{ overdue.total }} 单待跟进</el-tag>
           </div>
+          <div class="ov-tip">点击任意工单，直接打开工单详情处理，不用再去工单列表里搜</div>
           <div v-if="!overdue.list.length" class="empty">当前没有未闭环工单，状态良好</div>
           <template v-else>
             <!-- 固定高度 + 内部滚动：积压几十单也不会把整页拉长 -->
@@ -241,14 +242,22 @@
             <div class="ov-list">
               <!-- 超 24 小时（1440 分钟）把时长标红；超 72 小时（4320 分钟）整条加红底，
                    分级是为了让「挂了一天」和「挂了三天」在视觉上能区分开 -->
-              <div v-for="t in overdue.list" :key="t.ticket_id" class="overdue-item" :class="{ serious: (t.age_min || 0) >= 4320 }">
+              <!-- 整条可点：跳到工单列表并自动打开该单详情（?open=），详情里可直接编辑 -->
+              <div v-for="t in overdue.list" :key="t.ticket_id"
+                   class="overdue-item clickable" :class="{ serious: (t.age_min || 0) >= 4320 }"
+                   tabindex="0" role="button"
+                   :title="`打开工单 ${t.report_no || t.ticket_id} 处理`"
+                   @click="openTicket(t)" @keydown.enter="openTicket(t)">
                 <div class="ov-top">
                   <span class="ov-hours" :class="{ 'danger-text': (t.age_min || 0) >= 1440 }">已挂 {{ ageText(t) }}</span>
                   <span class="ov-user">{{ t.real_name || '—' }}</span>
                   <span class="ov-type">{{ t.problem_type || '未分类' }}</span>
                 </div>
                 <div class="ov-content">{{ t.service_content || '（无内容）' }}</div>
-                <div class="ov-meta">{{ t.app_system || '—' }} · {{ t.happen_time }}</div>
+                <div class="ov-meta">
+                  <span>{{ t.app_system || '—' }} · {{ t.happen_time }}</span>
+                  <span class="ov-go">去处理 <el-icon><ArrowRight /></el-icon></span>
+                </div>
               </div>
             </div>
             <div class="ov-page">
@@ -381,7 +390,11 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import R from '../api'
+
+// 跳转工单详情用（超期列表整条可点）
+const router = useRouter()
 
 // 顶部时间维度：整页指标、图表、汇报要点都按它取数；与下方人员分析的 personRange 相互独立
 const range = ref('month')
@@ -518,6 +531,18 @@ function ageText(t) {
   const d = Math.floor(h / 24)
   const rh = h % 24
   return rh ? `${d} 天 ${rh} 小时` : `${d} 天`
+}
+
+/**
+ * 从超期列表跳到工单详情：带 ?open=<id> 进工单列表页，
+ * 该页 onMounted / watch 会识别这个参数并自动打开详情弹窗，详情里可直接编辑、派单或退回。
+ * 用 ticket_id 而不是 report_no，因为详情接口认的是主键。
+ *
+ * @param {{ticket_id: number|string}} t 超期列表中的一条工单
+ */
+function openTicket(t) {
+  if (!t || !t.ticket_id) return
+  router.push({ path: '/tickets', query: { open: t.ticket_id } })
 }
 
 // 体检失败不阻塞主流程：提示条不出现即可，指标照常展示
@@ -981,7 +1006,15 @@ onBeforeUnmount(() => {
 .ov-user { font-weight: 600; color: var(--it-text); }
 .ov-type { margin-left: auto; background: var(--it-bg); color: var(--it-text-sub); padding: 1px 8px; border-radius: 8px; }
 .ov-content { font-size: 13px; color: var(--it-text); margin: 4px 0 2px; }
-.ov-meta { font-size: 11.5px; color: var(--it-text-sub); }
+/* 整条可点：hover 给底色 + 手型，右侧「去处理」跟着高亮，视觉上就能看出可跳转 */
+.overdue-item.clickable { cursor: pointer; border-radius: 6px; transition: background 0.15s; }
+.overdue-item.clickable:hover { background: var(--it-bg); }
+.overdue-item.clickable:hover .ov-go { text-decoration: underline; }
+.overdue-item.clickable:focus-visible { outline: 2px solid var(--it-primary); outline-offset: 2px; }
+.ov-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--it-text-sub); }
+.ov-go { display: inline-flex; align-items: center; gap: 2px; color: var(--it-primary); white-space: nowrap; }
+.ov-go .el-icon { font-size: 12px; }
+.ov-tip { font-size: 11.5px; color: var(--it-text-sub); margin: -4px 0 8px; }
 .empty { color: var(--it-text-sub); font-size: 13px; padding: 14px 0; text-align: center; }
 
 /* 超期工单：固定高度内部滚动（约 5 条）+ 底部分页 */

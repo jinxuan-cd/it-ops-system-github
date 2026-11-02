@@ -15,7 +15,7 @@
 #    bash scripts/demo-reset.sh          # 交互确认
 #    bash scripts/demo-reset.sh -y       # 跳过确认
 #  -----------------------------------------------------------------------------
-#  作者：锦轩 (JinXuan) <2686389727@qq.com>   创建：2026-11-02   版本：1.2.1
+#  作者：锦轩 (JinXuan) <2686389727@qq.com>   创建：2026-11-02   版本：1.2.2
 #  Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
 #  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
 #        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。

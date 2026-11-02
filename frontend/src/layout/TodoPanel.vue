@@ -3,7 +3,7 @@
   侧滑面板展示今日待办并支持快速处理
 
   作者：锦轩 (JinXuan) <2686389727@qq.com>
-  创建：2026-10-29　　版本：1.2.1
+  创建：2026-10-29　　版本：1.2.2
   版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
   许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
         其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
@@ -199,7 +199,8 @@ async function load() {
   // 否则用户会以为真的没活儿，其实是接口挂了
   const [pending, dash, mineTickets, poolTickets] = await Promise.all([
     R.pendingToday().catch(() => null),
-    R.getDashboard(userStore.isAdmin ? { all: 1 } : {}).catch(() => null),
+    // 看板接口恒定按本人统计（含目标进度），管理员也不需要额外参数
+    R.getDashboard().catch(() => null),
     R.listTickets({ mine: 1, status: 'processing' }).catch(() => []),
     userStore.canClaim ? R.poolTickets().catch(() => []) : []
   ])

@@ -3,23 +3,25 @@
   按今日/本周/本月/上月/本年切换整页指标、趋势、类型排名与待办
 
   作者：锦轩 (JinXuan) <2686389727@qq.com>
-  创建：2026-10-29　　版本：1.2.1
+  创建：2026-10-29　　版本：1.2.2
   版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
   许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
         其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
 -->
 <template>
+  <!--
+    个人看板：整页只统计「本人提的 + 指派给自己的」工单，
+    不做管理员例外 —— 全公司口径统一看团队运营分析，避免两种数据混在一页
+  -->
   <div class="it-page">
     <!-- 顶部：时间维度切换（整页跟着变） -->
     <div class="dash-head">
       <div class="dash-title">
-        <h3 class="it-section-title" style="margin:0">
-          数据看板
-          <el-tag v-if="userStore.canViewAll" size="small" type="warning" style="margin-left:8px">全公司</el-tag>
-        </h3>
+        <h3 class="it-section-title" style="margin:0">数据看板</h3>
         <div class="range-note" v-if="ov.start_date">
           {{ ov.range_label }} · {{ ov.start_date }} ~ {{ ov.end_date }}
           <span class="dot">·</span>趋势{{ unitText }}
+          <span class="dot">·</span>仅统计本人相关工单
         </div>
       </div>
       <div class="dash-actions">
@@ -282,10 +284,11 @@ const extras = computed(() => {
 })
 
 // 扩展指标单独取一次：SLA 超期、指派给我、故障、今日巡检。
-// 和主看板接口解耦，失败时静默降级，不让整页因为附属信息报错
+// 和主看板接口解耦，失败时静默降级，不让整页因为附属信息报错。
+// 不传 all：后端恒定按本人过滤，管理员也只看自己的数
 async function loadExtra() {
   try {
-    Object.assign(extra, await R.getDashboardExtra(userStore.canViewAll ? { all: 1 } : {}))
+    Object.assign(extra, await R.getDashboardExtra())
   } catch { /* 扩展数据失败不影响主看板 */ }
 }
 
@@ -303,12 +306,12 @@ function statusText(s) {
 
 // 切换时间维度：整页重新取数并重绘
 // range 是传给后端的参数，不是前端过滤：指标、趋势分桶（本月按天、本年按月）、
-// 类型排名、最近工单、待办都由后端按同一区间算好，保证各区块口径一致
+// 类型排名、最近工单、待办都由后端按同一区间算好，保证各区块口径一致。
+// 不传 all：这是个人看板，管理员看到的一样是本人数据
 async function reload() {
   loading.value = true
   try {
-    const params = { range: range.value, ...(userStore.canViewAll ? { all: 1 } : {}) }
-    const data = await R.getDashboardOverview(params)
+    const data = await R.getDashboardOverview({ range: range.value })
     Object.assign(ov, data)
     loadExtra()
     // 等数据驱动 DOM 刷新落定（图表容器的 v-show 切换完）再绘制，否则拿到的是隐藏容器

@@ -3,7 +3,7 @@
   工单列表检索、抢单派单、完成、批量操作与导出
 
   作者：锦轩 (JinXuan) <2686389727@qq.com>
-  创建：2026-10-29　　版本：1.2.1
+  创建：2026-10-29　　版本：1.2.2
   版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
   许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
         其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
@@ -237,6 +237,8 @@
               {{ detail.assignee_id ? '转单' : '派单' }}
             </el-button>
             <el-button v-if="detailCanRelease" type="warning" plain @click="onRelease(detail)">退回待接单池</el-button>
+            <!-- 从看板 / 团队分析点进来时，在这里就能直接改，不用先关弹窗再回列表找 -->
+            <el-button v-if="canWrite && detail" type="primary" plain @click="openEdit(detail)">编辑</el-button>
           </div>
           <el-button @click="detailVisible = false">关闭</el-button>
         </div>
@@ -681,6 +683,11 @@ async function onSaveEdit() {
     })
     ElMessage.success('已保存')
     editVisible.value = false
+    // 若详情弹窗还开着（例如从团队分析点进来 → 详情 → 编辑），同步刷一次详情，
+    // 否则详情里显示的还是改动前的旧值，容易让人以为没保存成功
+    if (detailVisible.value && detail.value && Number(detail.value.ticket_id) === Number(editForm.ticket_id)) {
+      openDetailById(editForm.ticket_id)
+    }
     load()
     window.dispatchEvent(new CustomEvent('itops:todo-changed'))
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
@@ -704,7 +711,10 @@ function applyOpenFromQuery() {
   const q = route.query
   if (!q.open) return
   openDetailById(q.open).then(t => {
-    if (t && q.action === 'assign') openAssign(t)
+    if (!t) return
+    // action 可选：assign=直接弹出派单，edit=直接弹出编辑，不带则只开详情
+    if (q.action === 'assign') openAssign(t)
+    else if (q.action === 'edit') openEdit(t)
   })
   router.replace({ path: '/tickets' })
 }
