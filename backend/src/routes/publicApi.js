@@ -11,6 +11,7 @@ const { applySla } = require('../utils/sla')
 const { broadcast } = require('../utils/notifier')
 const { dispatchTicket } = require('../utils/dispatch')
 const { imageUpload, uploadDir } = require('../middleware/upload')
+const { PORTAL_VERSION } = require('../utils/portalVersion')
 
 // ---- 简易频率限制（内存，重启清零，够用）----
 const HITS = new Map()
@@ -57,7 +58,9 @@ router.get('/config', asyncHandler(async (req, res) => {
     has_key: !!ps.key,
     key_ok: req.query.k ? req.query.k === ps.key : false,
     // 值班 IT 联系方式（1~2 人），门户渲染成可点击拨打的按钮
-    duty_contacts: ps.duty_contacts || []
+    duty_contacts: ps.duty_contacts || [],
+    // 后端版本，门户发现与自己不一致会提示「页面是旧缓存」
+    portal_version: PORTAL_VERSION
   })
 }))
 

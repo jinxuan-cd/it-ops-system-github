@@ -4,6 +4,7 @@ const router = express.Router()
 const { ok, fail, asyncHandler } = require('../utils/helpers')
 const { auth, adminOnly } = require('../middleware/auth')
 const { settingGet, settingSet, ensurePublicSettings } = require('../utils/seed')
+const { PORTAL_VERSION } = require('../utils/portalVersion')
 
 router.use(auth)
 
@@ -24,6 +25,20 @@ function normalizeBaseUrl(raw) {
   }
 }
 
+// 两个对外端口（门户必须用 PUBLIC_PORT，填成 ADMIN_PORT 扫码会打开后台登录页）
+const ADMIN_PORT = String(process.env.ADMIN_PORT || '8080')
+const PUBLIC_PORT = String(process.env.PUBLIC_PORT || '8081')
+
+function portOf(url) {
+  try {
+    const u = new URL(url)
+    if (u.port) return u.port
+    return u.protocol === 'https:' ? '443' : '80'
+  } catch {
+    return ''
+  }
+}
+
 async function readPublicSettings() {
   const ps = await ensurePublicSettings()
   return {
@@ -33,7 +48,12 @@ async function readPublicSettings() {
     // 员工自助门户的公网地址，例如 http://it-report.example.com:8081
     public_base_url: (await settingGet('public_base_url')) || '',
     // 值班 IT 联系方式：最多 2 人，门户上可直接点击拨打
-    duty_contacts: ps.duty_contacts || []
+    duty_contacts: ps.duty_contacts || [],
+    // 后端认定门户版本，用于核对服务器上的门户是否已更新
+    portal_version: PORTAL_VERSION,
+    // 两个对外端口，前端据此提示「是不是把管理端端口填成了门户地址」
+    admin_port: ADMIN_PORT,
+    public_port: PUBLIC_PORT
   }
 }
 
@@ -51,6 +71,10 @@ router.put('/public-settings', adminOnly, asyncHandler(async (req, res) => {
     const norm = normalizeBaseUrl(raw)
     // 填了但解析不出来，直接报错，避免存进空值后二维码指回内网地址
     if (raw && !norm) return fail(res, '公网门户地址格式不正确，请填写如 http://your-domain.com:8081')
+    // 填成管理端端口是最常见的坑：扫码会打开后台登录页，员工以为「报障系统变了」
+    if (norm && portOf(norm) === ADMIN_PORT) {
+      return fail(res, `这个地址用的是管理端端口 ${ADMIN_PORT}，员工扫码会打开后台登录页。员工门户端口是 ${PUBLIC_PORT}，请改成 http://域名或IP:${PUBLIC_PORT}`)
+    }
     await settingSet('public_base_url', norm)
   }
   // 值班 IT 联系方式：最多 2 人，姓名可空，电话必填；只保留数字与 + - 空格

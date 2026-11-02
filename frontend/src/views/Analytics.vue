@@ -147,12 +147,12 @@
       </el-col>
     </el-row>
 
-    <!-- 问题类别帕累托 + 应用系统排名 -->
+    <!-- 问题类别排名 + 应用系统排名 -->
     <el-row :gutter="14" class="chart-row">
       <el-col :md="12">
         <div class="it-card">
           <div class="it-between" style="margin-bottom:4px">
-            <h4 class="it-section-title" style="margin:0">问题类别排名（帕累托）</h4>
+            <h4 class="it-section-title" style="margin:0">问题类别排名</h4>
             <span class="mini-note">共 {{ data.problemRank.kinds || 0 }} 类</span>
           </div>
           <div ref="paretoEl" class="chart"></div>
@@ -607,39 +607,31 @@ function drawPareto() {
     render(paretoEl.value, { title: { text: '本期暂无工单', left: 'center', top: 'middle', textStyle: { color: c.sub, fontSize: 13 } } })
     return
   }
-  // 帕累托关键少数：累计占比 ≤ 80% 的类别用高亮色（这些是应该优先治理的问题）
-  const colors = list.map(it => (it.cum_ratio <= 80 ? c.warning : c.primary))
+  // 只保留排名柱状图（帕累托的累计占比折线与 80% 参考线已按要求移除）
   render(paretoEl.value, {
     tooltip: {
       trigger: 'axis',
+      axisPointer: { type: 'shadow' },
       formatter: ps => {
-        const i = ps[0].dataIndex
-        const it = list[i]
-        return `${it.name}<br/>工单 ${it.value} 单（占比 ${it.ratio}%）<br/>累计占比 ${it.cum_ratio}%<br/>平均处理 ${it.avg_hours || 0} h`
+        const it = list[ps[0].dataIndex]
+        return it ? `${it.name}<br/>工单 ${it.value} 单（占比 ${it.ratio}%）` : ''
       }
     },
-    grid: { left: 44, right: 46, top: 26, bottom: 46 },
+    grid: { left: 44, right: 20, top: 26, bottom: 46 },
     xAxis: {
       type: 'category', data: list.map(i => i.name),
       axisLabel: { color: c.sub, fontSize: 11, interval: 0, rotate: list.length > 6 ? 30 : 0, formatter: v => (v && v.length > 7 ? v.slice(0, 7) + '…' : v) },
       axisLine: { lineStyle: { color: c.split } }
     },
-    yAxis: [
-      { type: 'value', minInterval: 1, name: '单', nameTextStyle: { color: c.sub, fontSize: 11 }, ...axisCommon() },
-      { type: 'value', max: 100, name: '%', nameTextStyle: { color: c.sub, fontSize: 11 }, axisLabel: { color: c.sub, fontSize: 11, formatter: '{value}' }, splitLine: { show: false }, axisLine: { lineStyle: { color: c.split } } }
-    ],
-    series: [
-      {
-        name: '工单量', type: 'bar', data: list.map((it, i) => ({ value: it.value, itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] } })),
-        barMaxWidth: 28,
-        label: { show: true, position: 'top', color: c.sub, fontSize: 11, formatter: p => `${list[p.dataIndex].ratio}%` }
-      },
-      {
-        name: '累计占比', type: 'line', yAxisIndex: 1, data: list.map(i => i.cum_ratio), smooth: true,
-        symbolSize: 5, lineStyle: { color: c.danger, width: 2 }, itemStyle: { color: c.danger },
-        markLine: { silent: true, symbol: 'none', data: [{ yAxis: 80, lineStyle: { color: c.danger, type: 'dashed' }, label: { formatter: '80%', color: c.danger, fontSize: 10 } }] }
-      }
-    ]
+    yAxis: { type: 'value', minInterval: 1, name: '单', nameTextStyle: { color: c.sub, fontSize: 11 }, ...axisCommon() },
+    series: [{
+      name: '工单量',
+      type: 'bar',
+      barMaxWidth: 28,
+      itemStyle: { color: c.primary, borderRadius: [4, 4, 0, 0] },
+      label: { show: true, position: 'top', color: c.sub, fontSize: 11 },
+      data: list.map(i => i.value)
+    }]
   })
 }
 

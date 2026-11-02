@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#2563eb">
 <meta name="robots" content="noindex, nofollow">
 <title>IT 报障服务台</title>
-<link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="/style.css?v=20261102">
 </head>
 <body>
 
@@ -113,7 +113,7 @@
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2"/></svg>
             拍照
           </button>
-          <span class="hint" id="shotHint">拍下报错弹窗，运维一眼就能看懂问题</span>
+          <span class="hint" id="shotHint">截图后可直接 Ctrl+V 粘贴（手机可长按粘贴）</span>
         </div>
         <input type="file" id="filePick" accept="image/*" multiple hidden>
         <input type="file" id="fileShot" accept="image/*" capture="environment" hidden>
@@ -187,11 +187,11 @@
 
 <footer class="foot">
   <p id="footDuty">如遇紧急故障，请直接电话联系 IT 值班人员</p>
-  <p class="muted small">IT 运维服务台 · 由 锦轩 开发</p>
+  <p class="muted small">IT 运维服务台 · 由 锦轩 开发 · <span id="ver">v—</span></p>
 </footer>
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="./app.js"></script>
+<script src="/app.js?v=20261102"></script>
 </body>
 </html>

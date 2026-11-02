@@ -64,6 +64,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change_this_secret_in_prod}
       # 首次启动创建的管理员初始口令（用户表为空时生效）
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      # 两个对外端口：设置公网门户地址时用来拦截「把管理端端口填进去」这类错误
+      ADMIN_PORT: ${ADMIN_PORT:-8080}
+      PUBLIC_PORT: ${PUBLIC_PORT:-8081}
       UPLOAD_DIR: /app/uploads
       # 备份包存放目录（挂卷，重建容器不丢）
       BACKUP_DIR: /app/backups

@@ -20,7 +20,7 @@
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="部门">
-                <el-select v-model="form.dept" placeholder="选择或直接输入部门" filterable allow-create default-first-option clearable style="width:100%">
+                <el-select v-model="form.dept" placeholder="选择或输入部门（须为字典项）" filterable allow-create default-first-option clearable style="width:100%" @change="v => guardDict('dept', v)">
                   <el-option v-for="d in dicts.dept" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>
@@ -32,14 +32,14 @@
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="应用系统">
-                <el-select v-model="form.app_system" placeholder="选择或直接输入系统" filterable allow-create default-first-option clearable style="width:100%" @change="onPick">
+                <el-select v-model="form.app_system" placeholder="选择或输入系统（须为字典项）" filterable allow-create default-first-option clearable style="width:100%" @change="v => guardDict('app_system', v)">
                   <el-option v-for="d in dicts.app_system" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="问题类别">
-                <el-select v-model="form.problem_type" placeholder="选择或直接输入类别" filterable allow-create default-first-option clearable style="width:100%" @change="onPick">
+                <el-select v-model="form.problem_type" placeholder="选择或输入类别（须为字典项）" filterable allow-create default-first-option clearable style="width:100%" @change="v => guardDict('problem_type', v)">
                   <el-option v-for="d in dicts.problem_type" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>
@@ -218,6 +218,51 @@ async function fetchRecommend() {
 }
 function onPick() { fetchRecommend() }
 
+// ---------------------------------------------------------------------------
+// 部门 / 应用系统 / 问题类别：可以打字输入（不必先展开下拉），
+// 但值必须命中「基础字典」。命中就保留（顺带纠正多余空格、大小写），
+// 没命中立刻清空并提示去字典里维护，避免录入出字典外的脏数据。
+// ---------------------------------------------------------------------------
+const DICT_NAME = { dept: '部门', app_system: '应用系统', problem_type: '问题类别' }
+
+function dictHas(field, v) {
+  return (dicts[field] || []).some(d => d.dict_label === v)
+}
+
+function guardDict(field, v) {
+  if (!v) return
+  const list = dicts[field] || []
+  if (!list.length) return // 字典没加载出来时不阻断录入
+  if (dictHas(field, v)) { if (field !== 'dept') onPick(); return }
+
+  const norm = String(v).replace(/\s+/g, '').toLowerCase()
+  const hit = list.find(d => String(d.dict_label).replace(/\s+/g, '').toLowerCase() === norm)
+  if (hit) {
+    form[field] = hit.dict_label
+    ElMessage.info(`已按字典纠正为「${hit.dict_label}」`)
+    if (field !== 'dept') onPick()
+    return
+  }
+  const bad = v
+  form[field] = ''
+  ElMessage.warning(`${DICT_NAME[field]}「${bad}」不在基础字典中，请从下拉列表选择；需要新增请先到「基础字典」维护。`)
+}
+
+// 提交前兜底再校验一次
+function checkDicts() {
+  for (const f of ['dept', 'app_system', 'problem_type']) {
+    const v = form[f]
+    if (!v) continue
+    const list = dicts[f] || []
+    if (!list.length) continue
+    if (!dictHas(f, v)) {
+      ElMessage.warning(`${DICT_NAME[f]}「${v}」不在基础字典中，请重新选择`)
+      return false
+    }
+  }
+  return true
+}
+
 // 输入服务内容时自动（防抖）触发推荐——实现「关键字自动识别服务内容」
 watch(() => form.service_content, debounceRecommend)
 
@@ -268,6 +313,7 @@ async function onSubmit() {
     ElMessage.warning('请填写发生时间与服务内容')
     return
   }
+  if (!checkDicts()) return
   submitting.value = true
   try {
     const payload = {

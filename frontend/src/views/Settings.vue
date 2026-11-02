@@ -162,7 +162,23 @@
               </div>
               <div class="tip" style="margin-top:6px;line-height:1.6">
                 员工在外网访问自助门户的地址，填<strong>域名或公网 IP</strong>都可以，端口填员工门户端口（默认 8081）。
+                <br />只填 <code>协议://域名或IP:端口</code>，<strong>不要带路径</strong>。
               </div>
+              <el-alert v-if="portIsAdmin" type="error" :closable="false" show-icon style="margin-top:10px"
+                title="端口填错了：这是管理端端口，扫码会打开后台登录页">
+                <div style="font-size:12.5px;line-height:1.7">
+                  管理端 <code>{{ ss.admin_port }}</code>（要登录才能用，员工打不开），员工门户是 <code>{{ ss.public_port }}</code>。
+                  <br />请改成 <code>{{ suggestedBase }}</code>，保存后重新打印二维码。
+                </div>
+              </el-alert>
+              <el-alert v-if="ss.public_base_url && !baseHasPort && !portIsAdmin" type="warning" :closable="false" show-icon style="margin-top:10px"
+                title="地址里没有写端口，浏览器会按 80 端口访问">
+                <div style="font-size:12.5px;line-height:1.7">
+                  员工门户默认映射在 <code>{{ ss.public_port }}</code>，请写成 <code>http://公网IP:{{ ss.public_port }}</code>。
+                  <br />如果你已经用宝塔 / nginx 把域名反代到 {{ ss.public_port }}，填 <code>http://your-domain.com</code> 就是对的。
+                  <br />打开下面链接看到「IT 报障服务台」页面才算配置正确。
+                </div>
+              </el-alert>
             </el-form-item>
           </el-form>
 
@@ -200,17 +216,25 @@
             <div class="qr-info">
               <div class="qr-line"><span>报障链接</span></div>
               <el-input v-if="reportUrl" :model-value="reportUrl" readonly size="small">
-                <template #append><el-button @click="copy(reportUrl)">复制</el-button></template>
+                <template #append>
+                  <el-button @click="copy(reportUrl)">复制</el-button>
+                  <el-button @click="openUrl(reportUrl)">打开测试</el-button>
+                </template>
               </el-input>
               <div v-else class="tip">入口密钥缺失，无法生成链接</div>
               <div class="qr-line" style="margin-top:12px"><span>常见问题链接</span></div>
               <el-input v-if="faqUrl" :model-value="faqUrl" readonly size="small">
-                <template #append><el-button @click="copy(faqUrl)">复制</el-button></template>
+                <template #append>
+                  <el-button @click="copy(faqUrl)">复制</el-button>
+                  <el-button @click="openUrl(faqUrl)">打开测试</el-button>
+                </template>
               </el-input>
               <div v-else class="tip">入口密钥缺失，无法生成链接</div>
               <div class="qr-tip">
                 入口密钥：<code>{{ ss.report_key || '—' }}</code>，泄露后可在下方重置，旧二维码立即失效。<br>
                 门户端口只开放「报障 / 查进度 / 满意度 / 常见问题」，不包含任何管理接口。
+                <br v-if="ss.portal_version">门户版本：<code>v{{ ss.portal_version }}</code>
+                <span class="tip">（页脚显示的版本号应与此一致；不一致说明浏览器还在用旧缓存，或服务器上的门户没更新）</span>
               </div>
               <el-button v-if="userStore.isAdmin" size="small" type="danger" plain @click="rotateKey">重置入口密钥</el-button>
             </div>
@@ -565,7 +589,7 @@ async function saveInspCfg() {
 }
 
 /* ---------- 自助服务入口 ---------- */
-const ss = reactive({ report_enable: true, faq_enable: true, report_key: '', public_base_url: '', duty_contacts: [] })
+const ss = reactive({ report_enable: true, faq_enable: true, report_key: '', public_base_url: '', duty_contacts: [], portal_version: '', admin_port: '8080', public_port: '8081' })
 const qrData = ref('')
 const qrErr = ref('')
 const ssSaving = ref(false)
@@ -575,6 +599,36 @@ const pubBase = computed(() => (ss.public_base_url || location.origin).replace(/
 const isPublicBase = computed(() => !!ss.public_base_url)
 const reportUrl = computed(() => (ss.report_key ? `${pubBase.value}/report?k=${ss.report_key}` : ''))
 const faqUrl = computed(() => (ss.report_key ? `${pubBase.value}/faq?k=${ss.report_key}` : ''))
+// 地址里有没有写端口：没写端口浏览器按 80/443 访问，而员工门户默认映射在 8081，
+// 这是「填了地址却打开另一个页面 / 打不开」最常见的原因
+const baseHasPort = computed(() => {
+  const raw = String(ss.public_base_url || '').trim()
+  if (!raw) return true
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : 'http://' + raw)
+    return !!u.port
+  } catch { return false }
+})
+// 地址里实际生效的端口（没写时按协议取 80/443）
+const basePort = computed(() => {
+  const raw = String(ss.public_base_url || '').trim()
+  if (!raw) return ''
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : 'http://' + raw)
+    if (u.port) return u.port
+    return u.protocol === 'https:' ? '443' : '80'
+  } catch { return '' }
+})
+// 填成管理端端口：员工扫码会打开后台登录页，这是「页面样式不对」的头号原因
+const portIsAdmin = computed(() => !!ss.public_base_url && basePort.value === String(ss.admin_port))
+// 端口填错时给出一键可抄的正确写法
+const suggestedBase = computed(() => {
+  const host = String(ss.public_base_url || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/[:/].*$/, '')
+  return `http://${host || '你的公网IP'}:${ss.public_port}`
+})
 
 async function genQr() {
   qrData.value = ''
@@ -599,6 +653,9 @@ async function loadSs() {
     ss.faq_enable = !!c.faq_enable
     ss.report_key = c.report_key || ''
     ss.public_base_url = c.public_base_url || ''
+    ss.portal_version = c.portal_version || ''
+    ss.admin_port = c.admin_port || '8080'
+    ss.public_port = c.public_port || '8081'
     ss.duty_contacts = Array.isArray(c.duty_contacts) ? c.duty_contacts.map(x => ({ name: x.name || '', phone: x.phone || '', note: x.note || '' })) : []
     genQr()
   } catch (e) { ElMessage.error('读取自助入口配置失败：' + (e.__message || e.message)) }
@@ -626,6 +683,10 @@ function saveSs() {
 }
 
 function saveBase() {
+  if (portIsAdmin.value) {
+    ElMessage.error(`这个地址用的是管理端端口 ${ss.admin_port}，员工扫码会打开后台登录页。请改成 :${ss.public_port}`)
+    return
+  }
   return submitSs({ public_base_url: ss.public_base_url })
 }
 
@@ -662,6 +723,12 @@ function copy(text) {
     () => ElMessage.success('已复制'),
     () => ElMessage.warning('复制失败，请手动选中复制')
   )
+}
+
+// 当场打开门户验证：能看到「IT 报障服务台」并带值班电话，才算地址配对了
+function openUrl(url) {
+  if (!url) return
+  window.open(url, '_blank', 'noopener')
 }
 
 /* ---------- 备份与恢复（zip 压缩包） ---------- */
@@ -838,7 +905,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 .bk-list { border-top: 1px dashed var(--it-border); margin-top: 14px; padding-top: 4px; }
 .bk-warn { color: #d97706; }
 .set-tabs :deep(.el-tabs__header) { background: var(--it-card); border-radius: 10px; padding: 8px; }
-.set-tabs :deep(.el-tabs__item) { height: 40px; line-height: 40px; }
+.set-tabs :deep(.el-tabs__item) { height: 40px; line-height: 40px; white-space: nowrap; }
+/* 链接输入框后面的「复制 / 打开测试」两个按钮要紧贴输入框但彼此留缝 */
+.set-tabs :deep(.el-input-group__append) { padding: 0 0 0 1px; }
+.set-tabs :deep(.el-input-group__append .el-button) { padding: 0 10px; margin: 0; }
+.set-tabs :deep(.el-input-group__append .el-button + .el-button) { margin-left: 6px; }
 .set-card {
   background: var(--it-card); border: 1px solid var(--it-border);
   border-radius: 10px; padding: 18px 20px;

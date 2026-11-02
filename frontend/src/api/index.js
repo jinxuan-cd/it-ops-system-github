@@ -114,6 +114,8 @@ const R = {
 
   // 看板
   getDashboard: (params) => api.get('/dashboard', { params }),
+  // 整页看板：按时间维度（今日/本周/本月/上月/本年）一次取齐
+  getDashboardOverview: (params) => api.get('/dashboard/overview', { params }),
   getTrend: (range, extra) => api.get('/dashboard/trend', { params: { range, ...(extra || {}) } }),
   getDistribution: (params) => api.get('/dashboard/distribution', { params }),
   // 上月 + 本年度汇总分析

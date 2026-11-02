@@ -11,6 +11,9 @@
   var KEY = new URLSearchParams(location.search).get('k') || ''
   var API = '/api/public'
   var LAST_NO = 'itops_last_report_no'
+  // 版本号：改版时与 index.html 的资源版本串、后端 PORTAL_VERSION 一起改，
+  // 页脚会显示出来，方便一眼判断员工打开的是新版还是旧缓存
+  var PORTAL_VER = '20261102'
 
   var state = {
     tab: 'report',
@@ -100,6 +103,12 @@
 
         $('#tabs').hidden = false
         renderDuty(c.duty_contacts || [])
+        // 页脚展示版本；页面是自己缓存下来的旧版时给出明确提示
+        var ver = $('#ver')
+        if (ver) ver.textContent = 'v' + PORTAL_VER
+        if (c.portal_version && c.portal_version !== PORTAL_VER) {
+          toast('页面是旧缓存，请下拉刷新或清除缓存后重试', true)
+        }
         // 关掉某个入口时隐藏对应 Tab
         if (!c.report_enable) {
           $('[data-tab="report"]').hidden = true
@@ -298,7 +307,7 @@
       var left = 3 - state.attachments.length - state.uploading
       hint.textContent = state.uploading > 0
         ? '正在上传图片…'
-        : (left > 0 ? '还可以上传 ' + left + ' 张，拍下报错弹窗更清楚' : '已达 3 张上限')
+        : (left > 0 ? '还可 ' + left + ' 张 · 截图后可直接 Ctrl+V 粘贴' : '已达 3 张上限')
     }
     var pick = $('#btnPick')
     var shot = $('#btnShot')
@@ -384,7 +393,31 @@
         input.value = ''
       })
     })
+    // 直接粘贴截图（电脑 Ctrl+V、手机长按粘贴），不用先存相册再选文件
+    document.addEventListener('paste', onPasteImage)
     refreshShotUI()
+  }
+
+  // 从剪贴板取图片。若剪贴板里同时有文字，保留文字的正常粘贴（不拦截默认行为）
+  function onPasteImage(e) {
+    if (state.tab !== 'report') return
+    var form = $('#reportForm')
+    if (!form || form.hidden) return
+    var items = (e.clipboardData && e.clipboardData.items) || []
+    var files = []
+    var hasText = false
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i]
+      if (it.kind === 'string' && /^text\//.test(it.type || '')) hasText = true
+      if (it.kind === 'file' && /^image\//.test(it.type || '')) {
+        var f = it.getAsFile()
+        if (f) files.push(f)
+      }
+    }
+    if (!files.length) return
+    if (!hasText) e.preventDefault()
+    toast('已粘贴 ' + files.length + ' 张图片，正在上传…')
+    uploadShots(files)
   }
 
   // ---------------- 查进度 ----------------
