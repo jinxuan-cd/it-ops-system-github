@@ -29,6 +29,8 @@ const routes = [
       { path: 'goals', name: 'GoalManage', component: () => import('../views/GoalManage.vue'), meta: { write: true } },
       { path: 'projects', name: 'ProjectManage', component: () => import('../views/ProjectManage.vue'), meta: { write: true } },
       { path: 'knowledge', name: 'KnowledgeBase', component: () => import('../views/KnowledgeBase.vue') },
+      // 常见问题（公开到员工自助门户的问答）维护
+      { path: 'faq-manage', name: 'FaqManage', component: () => import('../views/FaqManage.vue') },
       { path: 'dictionary', name: 'Dictionary', component: () => import('../views/Dictionary.vue'), meta: { admin: true } },
       { path: 'users', name: 'UserManage', component: () => import('../views/UserManage.vue'), meta: { admin: true } },
       { path: 'sla', name: 'SlaSetting', component: () => import('../views/SlaSetting.vue'), meta: { admin: true } },

@@ -33,7 +33,10 @@ services:
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00
     volumes:
       - mariadb_data:/var/lib/mysql
-      # 只在数据卷为空（首次启动）时执行；已存在数据时不会覆盖
+      # ⚠ 初始化脚本**只在数据卷为空（第一次启动）时**执行一次。
+      #   之后无论是 restart、up -d、--force-recreate 还是换镜像重建容器，
+      #   数据目录已经有内容，入口脚本会跳过 init.sql，工单/账号/配置全部保留。
+      #   唯一会重新初始化的情况是手动删卷：docker compose down -v
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       # 用 env 里的 root 口令探活，避免 MariaDB 下 mysqladmin 空口令探测失败

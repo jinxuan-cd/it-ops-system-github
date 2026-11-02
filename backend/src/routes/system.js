@@ -31,7 +31,9 @@ async function readPublicSettings() {
     faq_enable: ps.faq_enable,
     report_key: ps.key,
     // 员工自助门户的公网地址，例如 http://it-report.example.com:8081
-    public_base_url: (await settingGet('public_base_url')) || ''
+    public_base_url: (await settingGet('public_base_url')) || '',
+    // 值班 IT 联系方式：最多 2 人，门户上可直接点击拨打
+    duty_contacts: ps.duty_contacts || []
   }
 }
 
@@ -50,6 +52,21 @@ router.put('/public-settings', adminOnly, asyncHandler(async (req, res) => {
     // 填了但解析不出来，直接报错，避免存进空值后二维码指回内网地址
     if (raw && !norm) return fail(res, '公网门户地址格式不正确，请填写如 http://your-domain.com:8081')
     await settingSet('public_base_url', norm)
+  }
+  // 值班 IT 联系方式：最多 2 人，姓名可空，电话必填；只保留数字与 + - 空格
+  if (b.duty_contacts !== undefined) {
+    const raw = Array.isArray(b.duty_contacts) ? b.duty_contacts : []
+    const list = []
+    for (const c of raw.slice(0, 2)) {
+      const phone = String((c && c.phone) || '').replace(/[^\d+\-\s()]/g, '').trim()
+      if (!phone) continue
+      list.push({
+        name: String((c && c.name) || '').slice(0, 20).trim(),
+        phone: phone.slice(0, 30),
+        note: String((c && c.note) || '').slice(0, 30).trim()
+      })
+    }
+    await settingSet('duty_contacts', JSON.stringify(list))
   }
   if (b.rotate) {
     const key = require('crypto').randomBytes(9).toString('hex')

@@ -48,6 +48,19 @@ const upload = multer({
   limits: { fileSize: 30 * 1024 * 1024 } // 单文件 30MB
 })
 
+// 只允许图片：员工自助报障上传故障截图/拍照用（公网入口，限制更严）
+const IMG_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic']
+const imageUpload = multer({
+  storage,
+  limits: { fileSize: 8 * 1024 * 1024 }, // 单张 8MB，手机原图一般 2~5MB
+  fileFilter(req, file, cb) {
+    const ext = extOf(file.originalname)
+    if (!IMG_EXT.includes(ext)) return cb(new Error('只支持上传图片（jpg/png/webp/gif/bmp/heic）'))
+    if (file.mimetype && !/^image\//.test(file.mimetype)) return cb(new Error('文件类型校验失败：' + file.mimetype))
+    cb(null, true)
+  }
+})
+
 // 静态目录的安全响应头：禁止浏览器猜测类型、禁止把上传文件当页面渲染
 function uploadStaticOptions() {
   return {
@@ -59,4 +72,4 @@ function uploadStaticOptions() {
   }
 }
 
-module.exports = { upload, uploadDir, uploadStaticOptions, ALLOWED_EXT }
+module.exports = { upload, imageUpload, uploadDir, uploadStaticOptions, ALLOWED_EXT }

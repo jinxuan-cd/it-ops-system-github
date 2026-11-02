@@ -114,12 +114,16 @@ const R = {
 
   // 看板
   getDashboard: (params) => api.get('/dashboard', { params }),
-  getTrend: (range) => api.get('/dashboard/trend', { params: { range } }),
+  getTrend: (range, extra) => api.get('/dashboard/trend', { params: { range, ...(extra || {}) } }),
   getDistribution: (params) => api.get('/dashboard/distribution', { params }),
+  // 上月 + 本年度汇总分析
+  getDashboardSummary: (params) => api.get('/dashboard/summary', { params }),
 
   // 团队运营分析（管理员 / 审计员）
   getAnalytics: (range) => api.get('/analytics/overview', { params: { range } }),
   getAnalyticsUserTickets: (params) => api.get('/analytics/user-tickets', { params }),
+  getAnalyticsOverdue: (params) => api.get('/analytics/overdue', { params }),
+  getAnalyticsPerson: (params) => api.get('/analytics/person', { params }),
   getDataHealth: () => api.get('/analytics/data-health'),
   repairData: () => api.post('/analytics/data-repair'),
 

@@ -1,6 +1,8 @@
 // 免登录公开接口：员工扫码报障、查询进度、满意度评价、常见问题自助门户
 // 安全措施：入口密钥校验 + 单 IP 频率限制 + 只暴露必要字段（不含内部处理细节与人名）
 const express = require('express')
+const fs = require('fs')
+const path = require('path')
 const router = express.Router()
 const { query } = require('../db')
 const { ok, fail, asyncHandler, safeJson } = require('../utils/helpers')
@@ -8,6 +10,7 @@ const { ensurePublicSettings } = require('../utils/seed')
 const { applySla } = require('../utils/sla')
 const { broadcast } = require('../utils/notifier')
 const { dispatchTicket } = require('../utils/dispatch')
+const { imageUpload, uploadDir } = require('../middleware/upload')
 
 // ---- 简易频率限制（内存，重启清零，够用）----
 const HITS = new Map()
@@ -52,7 +55,9 @@ router.get('/config', asyncHandler(async (req, res) => {
     report_enable: ps.report_enable,
     faq_enable: ps.faq_enable,
     has_key: !!ps.key,
-    key_ok: req.query.k ? req.query.k === ps.key : false
+    key_ok: req.query.k ? req.query.k === ps.key : false,
+    // 值班 IT 联系方式（1~2 人），门户渲染成可点击拨打的按钮
+    duty_contacts: ps.duty_contacts || []
   })
 }))
 
@@ -65,6 +70,25 @@ router.get('/options', asyncHandler(async (req, res) => {
   rows.forEach(r => { if (out[r.dict_type]) out[r.dict_type].push(r.dict_label) })
   ok(res, out)
 }))
+
+// ---- 报障截图上传（可选）：只收图片，单张 ≤ 8MB，最多 3 张 ----
+router.post('/upload', (req, res, next) => {
+  ;(async () => {
+    const ps = await ensurePublicSettings()
+    if (!ps.report_enable) return fail(res, '自助报障入口暂未开放，请联系 IT')
+    if (!req.query.k || req.query.k !== ps.key) return fail(res, '入口校验失败，请重新扫描二维码')
+    if (!rateLimit('upload:' + clientIp(req), 40)) return fail(res, '上传过于频繁，请稍后再试')
+    imageUpload.array('files', 3)(req, res, (err) => {
+      if (err) {
+        const msg = err.code === 'LIMIT_FILE_SIZE' ? '图片过大，单张上限 8MB' : (err.message || '上传失败')
+        return fail(res, msg)
+      }
+      const files = req.files || []
+      if (!files.length) return fail(res, '没有收到图片')
+      ok(res, files.map(f => '/uploads/' + f.filename), '上传成功')
+    })
+  })().catch(next)
+})
 
 // ---- 扫码报障提交 ----
 router.post('/report', asyncHandler(async (req, res) => {
@@ -81,13 +105,23 @@ router.post('/report', asyncHandler(async (req, res) => {
 
   const no = await nextReportNo()
   const priority = ['urgent', 'high', 'normal', 'low'].includes(b.priority) ? b.priority : 'normal'
+  // 故障截图（可选）：只接受本系统上传目录下「真实存在」的图片，最多 3 张。
+  // 只靠正则能被塞进不存在的路径（前端会裂图），所以再查一次磁盘。
+  const attachments = (Array.isArray(b.attachment) ? b.attachment : [])
+    .map(u => String(u).trim())
+    .filter(u => /^\/uploads\/[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp|gif|bmp|heic)$/i.test(u))
+    .filter(u => {
+      try { return fs.existsSync(path.join(uploadDir, path.basename(u))) } catch (e) { return false }
+    })
+    .slice(0, 3)
   // 员工报障进来的单先落「待接单」：等着运维接单（或服务台派单），不再需要管理员手工指派
   const r = await query(
     `INSERT INTO ticket (user_id, happen_time, contact, dept, service_content, app_system, problem_type,
-       status, priority, source, report_no, reporter_phone)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       status, priority, source, report_no, reporter_phone, attachment)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [0, nowStr(), String(b.contact).slice(0, 50), b.dept || null, String(b.content).slice(0, 2000),
-     b.app_system || null, b.problem_type || '其他', 'pending', priority, 'qr', no, phone || null]
+     b.app_system || null, b.problem_type || '其他', 'pending', priority, 'qr', no, phone || null,
+     attachments.length ? JSON.stringify(attachments) : null]
   )
   await applySla(r.insertId).catch(() => {})
 
@@ -97,7 +131,7 @@ router.post('/report', asyncHandler(async (req, res) => {
 
   // 通知 IT（企业内部群）
   broadcast('report', '【新报障】' + (b.app_system || '未填系统'),
-    `报障人：${b.contact}${b.dept ? '（' + b.dept + '）' : ''}\n问题：${String(b.content).slice(0, 200)}\n单号：${no}\n时间：${nowStr()}`
+    `报障人：${b.contact}${b.dept ? '（' + b.dept + '）' : ''}\n问题：${String(b.content).slice(0, 200)}\n单号：${no}${attachments.length ? `\n故障截图：${attachments.length} 张` : ''}\n时间：${nowStr()}`
   ).catch(() => {})
 
   ok(res, { report_no: no }, `报障已提交，单号 ${no}，请保留以便查询进度`)

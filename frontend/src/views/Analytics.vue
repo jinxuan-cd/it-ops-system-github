@@ -208,21 +208,108 @@
         <div class="it-card">
           <div class="it-between" style="margin-bottom:10px">
             <h4 class="it-section-title" style="margin:0">超期未闭环工单</h4>
-            <el-tag v-if="data.overdue.length" size="small" type="danger">{{ data.overdue.length }} 单待跟进</el-tag>
+            <el-tag v-if="overdue.total" size="small" type="danger">{{ overdue.total }} 单待跟进</el-tag>
           </div>
-          <div v-if="!data.overdue.length" class="empty">当前没有未闭环工单，状态良好</div>
-          <div v-for="t in data.overdue" :key="t.ticket_id" class="overdue-item" :class="{ serious: (t.age_min || 0) >= 4320 }">
-            <div class="ov-top">
-              <span class="ov-hours" :class="{ 'danger-text': (t.age_min || 0) >= 1440 }">已挂 {{ ageText(t) }}</span>
-              <span class="ov-user">{{ t.real_name || '—' }}</span>
-              <span class="ov-type">{{ t.problem_type || '未分类' }}</span>
+          <div v-if="!overdue.list.length" class="empty">当前没有未闭环工单，状态良好</div>
+          <template v-else>
+            <!-- 固定高度 + 内部滚动：积压几十单也不会把整页拉长 -->
+            <div class="ov-list">
+              <div v-for="t in overdue.list" :key="t.ticket_id" class="overdue-item" :class="{ serious: (t.age_min || 0) >= 4320 }">
+                <div class="ov-top">
+                  <span class="ov-hours" :class="{ 'danger-text': (t.age_min || 0) >= 1440 }">已挂 {{ ageText(t) }}</span>
+                  <span class="ov-user">{{ t.real_name || '—' }}</span>
+                  <span class="ov-type">{{ t.problem_type || '未分类' }}</span>
+                </div>
+                <div class="ov-content">{{ t.service_content || '（无内容）' }}</div>
+                <div class="ov-meta">{{ t.app_system || '—' }} · {{ t.happen_time }}</div>
+              </div>
             </div>
-            <div class="ov-content">{{ t.service_content || '（无内容）' }}</div>
-            <div class="ov-meta">{{ t.app_system || '—' }} · {{ t.happen_time }}</div>
-          </div>
+            <div class="ov-page">
+              <el-pagination
+                small background layout="prev, pager, next"
+                :total="overdue.total" :page-size="overdue.size" :current-page="overdue.page"
+                @current-change="loadOverdue" />
+              <span class="mini-note">第 {{ overdue.page }} / {{ Math.max(1, Math.ceil(overdue.total / overdue.size)) }} 页</span>
+            </div>
+          </template>
         </div>
       </el-col>
     </el-row>
+
+    <!-- 人员维度分析：选定一名员工，只看他自己的工单情况 -->
+    <div class="it-card" style="margin-bottom:14px">
+      <div class="it-between person-head">
+        <div>
+          <h4 class="it-section-title" style="margin:0">人员数据分析</h4>
+          <span class="mini-note">选定一名员工，只看他的受理、完成、积压与问题分布（已指派给他的工单算他的）</span>
+        </div>
+        <div class="person-tools">
+          <el-select v-model="personId" filterable clearable placeholder="选择员工" size="small" style="width:170px" @change="loadPerson">
+            <el-option v-for="u in data.userRank" :key="u.user_id" :label="u.real_name || u.username" :value="u.user_id" />
+          </el-select>
+          <el-radio-group v-model="personRange" size="small" @change="loadPerson">
+            <el-radio-button value="today">今日</el-radio-button>
+            <el-radio-button value="week">本周</el-radio-button>
+            <el-radio-button value="month">本月</el-radio-button>
+            <el-radio-button value="year">本年</el-radio-button>
+          </el-radio-group>
+        </div>
+      </div>
+
+      <div v-if="!personId" class="empty">还没有选择员工。选择后会显示他的工单受理量、完成量、积压、超期与问题类别分布。</div>
+      <div v-else v-loading="personLoading">
+        <div class="pm-row">
+          <div class="pm-item"><div class="pm-val">{{ person.metrics.accepted }}</div><div class="pm-label">受理</div></div>
+          <div class="pm-item"><div class="pm-val">{{ person.metrics.done }}</div><div class="pm-label">完成</div></div>
+          <div class="pm-item"><div class="pm-val">{{ person.metrics.done_rate }}<small>%</small></div><div class="pm-label">完成率</div></div>
+          <div class="pm-item">
+            <div class="pm-val">{{ person.metrics.avg_hours === null ? '—' : person.metrics.avg_hours }}<small v-if="person.metrics.avg_hours !== null"> h</small></div>
+            <div class="pm-label">平均时长</div>
+          </div>
+          <div class="pm-item"><div class="pm-val" :class="{ 'danger-text': person.metrics.backlog > 0 }">{{ person.metrics.backlog }}</div><div class="pm-label">当前积压</div></div>
+          <div class="pm-item"><div class="pm-val" :class="{ 'danger-text': person.metrics.overdue_now > 0 }">{{ person.metrics.overdue_now }}</div><div class="pm-label">超时未完成</div></div>
+          <div class="pm-item">
+            <div class="pm-val">{{ person.metrics.satisfy_cnt ? person.metrics.satisfy_avg : '—' }}</div>
+            <div class="pm-label">满意度<small v-if="person.metrics.satisfy_cnt">（{{ person.metrics.satisfy_cnt }} 条）</small></div>
+          </div>
+          <div class="pm-item"><div class="pm-val">{{ person.metrics.kb_cnt }}</div><div class="pm-label">知识沉淀</div></div>
+        </div>
+
+        <el-row :gutter="14">
+          <el-col :md="14">
+            <div class="chart-sub">
+              <h5 class="sub-title">受理 / 完成趋势（{{ person.range_label || '本月' }}）</h5>
+              <div ref="personTrendEl" class="chart"></div>
+            </div>
+          </el-col>
+          <el-col :md="10">
+            <div class="chart-sub">
+              <h5 class="sub-title">问题类别分布</h5>
+              <div v-if="!person.problemRank.length" class="empty">本期暂无工单</div>
+              <div v-show="person.problemRank.length" ref="personTypeEl" class="chart"></div>
+            </div>
+          </el-col>
+        </el-row>
+
+        <div class="sub-title" style="margin:10px 0 8px">最近工单（最多 10 条）</div>
+        <el-table :data="person.recent" size="small" empty-text="本期暂无工单">
+          <el-table-column prop="happen_time" label="发生时间" width="150" />
+          <el-table-column prop="app_system" label="系统" width="110" />
+          <el-table-column prop="problem_type" label="类别" width="110" />
+          <el-table-column prop="service_content" label="服务内容" show-overflow-tooltip />
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'done' ? 'success' : (row.status === 'pending' ? 'info' : 'warning')">
+                {{ row.status === 'done' ? '完成' : (row.status === 'pending' ? '待接单' : '处理中') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="耗时" width="80">
+            <template #default="{ row }">{{ row.hours == null ? '—' : row.hours + ' h' }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
 
     <!-- 近 6 个月 + 部门 -->
     <el-row :gutter="14" class="chart-row">
@@ -298,6 +385,78 @@ const drawerTitle = ref('')
 const drawerLoading = ref(false)
 const userTickets = ref([])
 
+/* ---------- 超期未闭环：独立分页（默认 10 条/页，列表区固定高度滚动） ---------- */
+const overdue = reactive({ list: [], total: 0, page: 1, size: 10 })
+async function loadOverdue(page) {
+  const p = Number(page) || 1
+  try {
+    const d = await R.getAnalyticsOverdue({ page: p, size: overdue.size })
+    overdue.list = d.list || []
+    overdue.total = Number(d.total || 0)
+    overdue.page = Number(d.page || p)
+    overdue.size = Number(d.size || overdue.size)
+  } catch (e) { /* 分页失败保留上一页数据 */ }
+}
+
+/* ---------- 人员维度分析 ---------- */
+const personId = ref(null)
+const personRange = ref('month')
+const personLoading = ref(false)
+const personTrendEl = ref(null)
+const personTypeEl = ref(null)
+const person = reactive({
+  range_label: '',
+  user: null,
+  metrics: { accepted: 0, done: 0, done_rate: 0, avg_hours: null, backlog: 0, overdue_now: 0, satisfy_avg: 0, satisfy_cnt: 0, kb_cnt: 0 },
+  trend: [],
+  problemRank: [],
+  appRank: [],
+  recent: []
+})
+
+async function loadPerson() {
+  if (!personId.value) return
+  personLoading.value = true
+  try {
+    const d = await R.getAnalyticsPerson({ user_id: personId.value, range: personRange.value })
+    Object.assign(person, d)
+    await nextTick()
+    drawPerson()
+  } catch (e) {
+    ElMessage.error(e.message || '人员数据加载失败')
+  } finally {
+    personLoading.value = false
+  }
+}
+
+function drawPerson() {
+  const c = C()
+  const trend = person.trend || []
+  if (personTrendEl.value) {
+    render(personTrendEl.value, {
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, itemWidth: 12, itemHeight: 8, textStyle: { fontSize: 12, color: c.sub } },
+      grid: { left: 40, right: 16, top: 34, bottom: 28 },
+      xAxis: { type: 'category', data: trend.map(t => (t.key || '').slice(5)), ...axisCommon() },
+      yAxis: { type: 'value', minInterval: 1, ...axisCommon() },
+      series: [
+        { name: '受理', type: 'bar', barMaxWidth: 16, itemStyle: { color: c.primary }, data: trend.map(t => t.accepted) },
+        { name: '完成', type: 'line', smooth: true, symbolSize: 6, itemStyle: { color: c.success }, lineStyle: { color: c.success }, data: trend.map(t => t.done) }
+      ]
+    })
+  }
+  const types = [...(person.problemRank || [])].sort((a, b) => a.value - b.value)
+  if (personTypeEl.value && types.length) {
+    render(personTypeEl.value, {
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 8, right: 30, top: 8, bottom: 8, containLabel: true },
+      xAxis: { type: 'value', minInterval: 1, ...axisCommon() },
+      yAxis: { type: 'category', data: types.map(t => t.name), axisLabel: { color: c.sub, fontSize: 11, width: 88, overflow: 'truncate' } },
+      series: [{ type: 'bar', barMaxWidth: 14, itemStyle: { color: c.warning, borderRadius: [0, 4, 4, 0] }, label: { show: true, position: 'right', fontSize: 11, color: c.sub }, data: types.map(t => t.value) }]
+    })
+  }
+}
+
 // 数据体检（异常数据统计）
 const health = reactive({ issues: 0, finish_before_happen: 0, done_without_finish: 0, happen_in_future: 0 })
 const repairing = ref(false)
@@ -367,6 +526,10 @@ async function load() {
     const [d] = await Promise.all([R.getAnalytics(range.value), loadHealth()])
     Object.assign(data, d)
     Object.assign(m, d.metrics)
+    // 超期列表首屏直接用总览返回的第一页，之后翻页走独立接口
+    overdue.list = d.overdue || []
+    overdue.total = Number(d.overdue_total || 0)
+    overdue.page = 1
     await nextTick()
     drawAll()
   } catch (e) {
@@ -654,7 +817,8 @@ async function openUser(row) {
 }
 
 function resize() {
-  ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value].forEach(el => {
+  ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value,
+    personTrendEl.value, personTypeEl.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
     if (c) c.resize()
   })
@@ -665,7 +829,8 @@ onMounted(() => {
   window.addEventListener('resize', resize)
 })
 onBeforeUnmount(() => {
-  ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value].forEach(el => {
+  ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value,
+    personTrendEl.value, personTypeEl.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
     if (c) c.dispose()
   })
@@ -735,8 +900,28 @@ onBeforeUnmount(() => {
 .ov-content { font-size: 13px; color: var(--it-text); margin: 4px 0 2px; }
 .ov-meta { font-size: 11.5px; color: var(--it-text-sub); }
 .empty { color: var(--it-text-sub); font-size: 13px; padding: 14px 0; text-align: center; }
+
+/* 超期工单：固定高度内部滚动（约 5 条）+ 底部分页 */
+.ov-list { max-height: 330px; overflow-y: auto; padding-right: 4px; }
+.ov-list::-webkit-scrollbar { width: 6px; }
+.ov-list::-webkit-scrollbar-thumb { background: var(--it-border); border-radius: 3px; }
+.ov-list::-webkit-scrollbar-track { background: transparent; }
+.ov-page { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--it-border); }
+
+/* 人员数据分析 */
+.person-head { margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
+.person-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pm-row { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; margin-bottom: 12px; }
+.pm-item { background: var(--it-bg); border-radius: 8px; padding: 10px 12px; }
+.pm-item .pm-val { font-size: 19px; font-weight: 700; color: var(--it-text); line-height: 1.2; }
+.pm-item .pm-val small { font-size: 11px; font-weight: 500; color: var(--it-text-sub); }
+.pm-item .pm-label { font-size: 11.5px; color: var(--it-text-sub); margin-top: 3px; }
+.chart-sub { border: 1px dashed var(--it-border); border-radius: 8px; padding: 10px 12px 4px; }
+.sub-title { font-size: 13px; font-weight: 600; color: var(--it-text); margin: 0 0 6px; }
+@media (max-width: 1200px) { .pm-row { grid-template-columns: repeat(4, 1fr); } }
 @media (max-width: 768px) {
   .head-actions { flex-wrap: wrap; }
   .chart { height: 240px; }
+  .pm-row { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

@@ -145,6 +145,11 @@ it-ops-system/
 ├── .env.example               # 部署环境变量模板（复制为 .env）
 ├── sql/
 │   └── init.sql               # 数据库初始化：18 张表 + 视图 + 字典 + SLA + 设置
+├── scripts/
+│   ├── upgrade.sh             # 安全升级（只重建、永不带 -v，数据不丢）
+│   ├── demo-data.sql          # 可选演示数据（一年工单 + 演示账号 + FAQ）
+│   ├── gen-demo-data.py       # 生成上面的演示数据 SQL
+│   └── demo-reset.sh          # 清空演示数据，恢复出厂
 ├── backend/                   # Express 后端（单进程，管理端与门户共用）
 │   ├── src/
 │   │   ├── index.js           # 入口：全部接口 + /api/public 免登录接口
@@ -301,6 +306,22 @@ TRUNCATE TABLE inspection;    TRUNCATE TABLE account_ledger;
 TRUNCATE TABLE audit_log;
 SET FOREIGN_KEY_CHECKS = 1;
 ```
+
+### 演示数据（可选，只想先看效果）
+
+出厂是空库，看板和团队分析的图表都是 0，不好判断效果。想直接看真实图表（月度趋势、上月汇总、超期分页、人员维度分析），可以铺一份演示数据：
+
+```bash
+# 铺演示数据：一年的工单 + 3 个演示账号 + 5 条常见问题
+docker compose exec -T db mariadb -uitops -p"$MYSQL_PASSWORD" itops < scripts/demo-data.sql
+
+# 用完一键清空（保留 admin、字典、系统设置）
+bash scripts/demo-reset.sh
+```
+
+演示账号 `zhangwei` / `lijing` / `wangqiang`，密码与 `admin` 相同。数据跨全年、含已完成与超期未完成工单，专门用来验证图表与分页。
+
+> 演示数据脚本由 `scripts/gen-demo-data.py` 生成。**生产环境不要执行。**
 
 ---
 
@@ -616,6 +637,30 @@ docker compose logs -f backend     # 看到 [migrate] 相关日志且无报错
 ```
 
 **数据库升级机制**：后端每次启动会执行 `migrateSchema()`，全部为 `CREATE TABLE IF NOT EXISTS` / 「列不存在才新增」，可重复执行；`sys_meta` 表记录一次性数据修复，已执行过的不会再跑。因此**升级不需要手工执行 SQL**，回滚同理（把代码切回旧版本重启即可）。
+
+### 升级会不会把数据清空？——不会
+
+这是刻意设计的行为，升级时请认准一个原则：**只要不带 `-v`，数据就一定在**。
+
+| 操作 | 会不会重新执行 `init.sql` | 工单数据 |
+| --- | --- | --- |
+| `docker compose restart` | 不会 | 保留 |
+| `docker compose up -d --build`（日常升级） | 不会 | 保留 |
+| `docker compose up -d --force-recreate` | 不会 | 保留 |
+| 换镜像版本后重建 | 不会 | 保留 |
+| `docker compose down`（不加 -v） | 不会 | 保留 |
+| **`docker compose down -v`** | **会（空库重建）** | **全部清空** |
+
+原因：`sql/init.sql` 挂在 `/docker-entrypoint-initdb.d/`，数据库入口脚本**只在数据目录为空时**才执行它。数据卷 `mariadb_data` 里有内容之后，这个脚本就会被跳过。
+
+想更省心可以直接用升级脚本（自带检查，绝不会删卷）：
+
+```bash
+bash scripts/upgrade.sh          # 用当前代码重建容器
+bash scripts/upgrade.sh --pull   # 先 git pull 再升级
+```
+
+脚本会先检测数据卷是否存在、提示先备份，然后执行 `docker compose up -d --build`，**永远不会带 `-v`**。
 
 ### 前端构建更新（不走 Docker）
 

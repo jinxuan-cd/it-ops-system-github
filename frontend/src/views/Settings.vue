@@ -166,7 +166,25 @@
             </el-form-item>
           </el-form>
 
-          <el-alert v-if="!isPublicBase" type="warning" :closable="false" show-icon style="margin-bottom:14px"
+          <h4 class="it-section-title" style="margin-top:20px">值班 IT 联系方式</h4>
+          <p class="tip" style="margin-bottom:10px">
+            填 1~2 个值班同事的电话，员工在自助门户上可以直接点击拨打（手机自动唤起拨号盘）；留空则门户不显示。
+          </p>
+          <div class="duty-list">
+            <div class="duty-row" v-for="(c, i) in ss.duty_contacts" :key="i">
+              <el-input v-model="c.name" placeholder="姓名/岗位，如 张伟（值班）" :disabled="!userStore.isAdmin" style="width:220px" />
+              <el-input v-model="c.phone" placeholder="电话，如 13800001234" :disabled="!userStore.isAdmin" style="width:200px" />
+              <el-input v-model="c.note" placeholder="备注，如 8:30-18:00" :disabled="!userStore.isAdmin" style="width:160px" />
+              <el-button v-if="userStore.isAdmin" text type="danger" @click="removeDuty(i)">删除</el-button>
+            </div>
+            <div v-if="!ss.duty_contacts.length" class="tip">还没有填写值班电话</div>
+          </div>
+          <div v-if="userStore.isAdmin" style="margin:10px 0 4px">
+            <el-button size="small" plain :disabled="ss.duty_contacts.length >= 2" @click="addDuty">+ 添加联系方式</el-button>
+            <el-button size="small" type="primary" :loading="ssSaving" @click="saveDuty">保存联系方式</el-button>
+          </div>
+
+          <el-alert v-if="!isPublicBase" type="warning" :closable="false" show-icon style="margin:14px 0"
             title="尚未配置公网门户地址，二维码暂时指向当前内网地址，外网/分公司员工扫码打不开。">
             <div style="font-size:12.5px;line-height:1.6">
               在上面填好地址（如 <code>http://公网IP:8081</code>）后点「保存」，二维码会立即改指向公网门户；内网访问不受影响。
@@ -547,7 +565,7 @@ async function saveInspCfg() {
 }
 
 /* ---------- 自助服务入口 ---------- */
-const ss = reactive({ report_enable: true, faq_enable: true, report_key: '', public_base_url: '' })
+const ss = reactive({ report_enable: true, faq_enable: true, report_key: '', public_base_url: '', duty_contacts: [] })
 const qrData = ref('')
 const qrErr = ref('')
 const ssSaving = ref(false)
@@ -581,6 +599,7 @@ async function loadSs() {
     ss.faq_enable = !!c.faq_enable
     ss.report_key = c.report_key || ''
     ss.public_base_url = c.public_base_url || ''
+    ss.duty_contacts = Array.isArray(c.duty_contacts) ? c.duty_contacts.map(x => ({ name: x.name || '', phone: x.phone || '', note: x.note || '' })) : []
     genQr()
   } catch (e) { ElMessage.error('读取自助入口配置失败：' + (e.__message || e.message)) }
 }
@@ -608,6 +627,21 @@ function saveSs() {
 
 function saveBase() {
   return submitSs({ public_base_url: ss.public_base_url })
+}
+
+// 值班联系方式：最多 2 个，电话必填
+function addDuty() {
+  if (ss.duty_contacts.length >= 2) return
+  ss.duty_contacts.push({ name: '', phone: '', note: '' })
+}
+function removeDuty(i) {
+  ss.duty_contacts.splice(i, 1)
+}
+function saveDuty() {
+  const list = ss.duty_contacts
+    .map(c => ({ name: (c.name || '').trim(), phone: (c.phone || '').trim(), note: (c.note || '').trim() }))
+    .filter(c => c.phone)
+  return submitSs({ duty_contacts: list })
 }
 
 async function rotateKey() {
@@ -788,6 +822,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
 <style scoped>
 .qr-wrap { display: flex; gap: 24px; margin-top: 18px; flex-wrap: wrap; }
+/* 值班联系方式 */
+.duty-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .qr-box { text-align: center; border: 1px solid var(--it-border); border-radius: 12px; padding: 12px; }
 .qr-img { width: 180px; height: 180px; display: block; border-radius: 6px; }
 .qr-loading { width: 180px; height: 180px; display: flex; align-items: center; justify-content: center; color: var(--it-text-sub); font-size: 13px; }

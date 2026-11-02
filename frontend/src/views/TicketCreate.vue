@@ -20,7 +20,7 @@
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="部门">
-                <el-select v-model="form.dept" placeholder="选择部门" filterable style="width:100%">
+                <el-select v-model="form.dept" placeholder="选择或直接输入部门" filterable allow-create default-first-option clearable style="width:100%">
                   <el-option v-for="d in dicts.dept" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>
@@ -32,14 +32,14 @@
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="应用系统">
-                <el-select v-model="form.app_system" placeholder="选择系统" filterable style="width:100%" @change="onPick">
+                <el-select v-model="form.app_system" placeholder="选择或直接输入系统" filterable allow-create default-first-option clearable style="width:100%" @change="onPick">
                   <el-option v-for="d in dicts.app_system" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
               <el-form-item label="问题类别">
-                <el-select v-model="form.problem_type" placeholder="选择类别" filterable style="width:100%" @change="onPick">
+                <el-select v-model="form.problem_type" placeholder="选择或直接输入类别" filterable allow-create default-first-option clearable style="width:100%" @change="onPick">
                   <el-option v-for="d in dicts.problem_type" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" />
                 </el-select>
               </el-form-item>

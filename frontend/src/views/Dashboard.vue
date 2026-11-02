@@ -30,6 +30,60 @@
       </div>
     </div>
 
+    <!-- 上月汇总 + 本年度趋势（滚动复盘用） -->
+    <div class="it-between" style="margin:2px 0 10px">
+      <h4 class="it-section-title" style="margin:0">上月与本年度汇总</h4>
+      <span class="mini-note">
+        本年度累计 {{ summary.year.total_accepted }} 单 · 完成 {{ summary.year.total_done }} 单
+        <template v-if="summary.year.avg_hours !== null"> · 平均 {{ summary.year.avg_hours }} h</template>
+      </span>
+    </div>
+    <div class="lm-row">
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.accepted }}</div>
+        <div class="lm-label">上月工单<small v-if="summary.last_month.ym">（{{ summary.last_month.ym }}）</small></div>
+      </div>
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.done }}</div>
+        <div class="lm-label">上月完成</div>
+      </div>
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.done_rate }}<small>%</small></div>
+        <div class="lm-label">上月完成率</div>
+      </div>
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.avg_hours === null ? '—' : summary.last_month.avg_hours }}<small v-if="summary.last_month.avg_hours !== null"> h</small></div>
+        <div class="lm-label">上月平均时长</div>
+      </div>
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.sla_overdue }}</div>
+        <div class="lm-label">上月超期完成</div>
+      </div>
+      <div class="lm-item">
+        <div class="lm-val">{{ summary.last_month.satisfy_avg === null ? '—' : summary.last_month.satisfy_avg }}</div>
+        <div class="lm-label">上月满意度<small v-if="summary.last_month.satisfy_cnt">（{{ summary.last_month.satisfy_cnt }} 条）</small></div>
+      </div>
+    </div>
+
+    <el-row :gutter="14" class="chart-row">
+      <el-col :md="16">
+        <div class="it-card">
+          <div class="it-between" style="margin-bottom:10px">
+            <h4 class="it-section-title" style="margin:0">{{ summary.year.year }} 年度月度趋势</h4>
+            <span class="mini-note">柱：受理 / 完成 · 线：平均处理时长</span>
+          </div>
+          <div ref="yearChart" class="chart"></div>
+        </div>
+      </el-col>
+      <el-col :md="8">
+        <div class="it-card">
+          <h4 class="it-section-title">上月问题类别 TOP</h4>
+          <div v-if="!summary.last_month_types.length" class="empty">上月没有工单数据</div>
+          <div v-show="summary.last_month_types.length" ref="lastTypeChart" class="chart"></div>
+        </div>
+      </el-col>
+    </el-row>
+
     <el-row :gutter="14" class="chart-row">
       <el-col :md="16">
         <div class="it-card">
@@ -146,6 +200,17 @@ const distRange = ref('month')
 const trendChart = ref(null)
 const pieType = ref(null)
 const pieApp = ref(null)
+const yearChart = ref(null)
+const lastTypeChart = ref(null)
+
+// 上月 + 本年度汇总
+const summary = reactive({
+  last_month: { ym: '', accepted: 0, done: 0, done_rate: 0, avg_hours: null, sla_overdue: 0, satisfy_avg: null, satisfy_cnt: 0 },
+  this_month: { accepted: 0, done: 0 },
+  diff: { accepted: 0, done: 0, avg_hours: null },
+  year: { year: new Date().getFullYear(), months: [], total_accepted: 0, total_done: 0, avg_hours: null },
+  last_month_types: []
+})
 
 // 扩展指标（故障 / SLA / 指派 / 满意度 / 巡检）：没数据的项自动不显示
 const extra = reactive({
@@ -206,25 +271,27 @@ async function loadDashboard() {
 
 async function loadTrend() {
   try {
-    const rows = await R.getTrend(trendRange.value)
+    // 管理员/审计员要看全公司；不加 all=1 会被后端的「只看自己」口径过滤成空图
+    const rows = await R.getTrend(trendRange.value, userStore.canViewAll ? { all: 1 } : {})
     // 切换「本周/本月」时复用已有实例，重复 init 会打印
     // "There is a chart instance already initialized on the dom" 并残留旧序列
     let chart = echarts.getInstanceByDom(trendChart.value)
     if (chart) chart.clear()
     else chart = echarts.init(trendChart.value)
+    const list = Array.isArray(rows) ? rows : []
     chart.setOption({
       tooltip: { trigger: 'axis' },
       grid: { left: 40, right: 20, top: 20, bottom: 30 },
-      xAxis: { type: 'category', data: rows.map(r => r.d), axisLabel: { rotate: 30, formatter: v => (v || '').slice(5) } },
+      xAxis: { type: 'category', data: list.map(r => r.d), axisLabel: { rotate: 30, formatter: v => (v || '').slice(5) } },
       yAxis: { type: 'value', minInterval: 1 },
-      series: [{ type: 'line', smooth: true, data: rows.map(r => r.c), areaStyle: { opacity: 0.15 }, itemStyle: { color: '#2f6fed' }, lineStyle: { color: '#2f6fed' } }]
-    })
+      series: [{ type: 'line', smooth: true, data: list.map(r => r.c), areaStyle: { opacity: 0.15 }, itemStyle: { color: '#2f6fed' }, lineStyle: { color: '#2f6fed' } }]
+    }, true)
   } catch (e) {}
 }
 
 async function loadDistribution() {
   try {
-    const data = await R.getDistribution({ range: distRange.value })
+    const data = await R.getDistribution({ range: distRange.value, ...(userStore.canViewAll ? { all: 1 } : {}) })
     const pieLabel = {
       formatter: '{b}：{c} ({d}%)',
       fontSize: 12
@@ -247,8 +314,74 @@ async function loadDistribution() {
   } catch (e) {}
 }
 
+// 上月汇总 + 本年度趋势：年度趋势用柱(受理/完成) + 线(平均时长)
+async function loadSummary() {
+  try {
+    const data = await R.getDashboardSummary(userStore.canViewAll ? { all: 1 } : {})
+    Object.assign(summary, data)
+  } catch (e) { return }
+  await nextTick()
+  renderYearChart()
+  renderLastTypeChart()
+}
+
+function renderYearChart() {
+  const el = yearChart.value
+  if (!el) return
+  let c = echarts.getInstanceByDom(el)
+  if (c) c.clear()
+  else c = echarts.init(el)
+  const months = summary.year.months || []
+  c.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0, itemWidth: 12, itemHeight: 8, textStyle: { fontSize: 12 } },
+    grid: { left: 44, right: 44, top: 34, bottom: 28 },
+    xAxis: { type: 'category', data: months.map(m => m.label), axisLabel: { fontSize: 11 } },
+    yAxis: [
+      { type: 'value', minInterval: 1, axisLabel: { fontSize: 11 } },
+      { type: 'value', axisLabel: { fontSize: 11, formatter: '{value}h' }, splitLine: { show: false } }
+    ],
+    series: [
+      { name: '受理', type: 'bar', barMaxWidth: 18, itemStyle: { color: '#2f6fed' }, data: months.map(m => m.accepted) },
+      { name: '完成', type: 'bar', barMaxWidth: 18, itemStyle: { color: '#18a058' }, data: months.map(m => m.done) },
+      {
+        name: '平均时长',
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: true,
+        symbolSize: 6,
+        itemStyle: { color: '#f0a020' },
+        lineStyle: { color: '#f0a020' },
+        data: months.map(m => m.avg_hours)
+      }
+    ]
+  })
+}
+
+function renderLastTypeChart() {
+  const el = lastTypeChart.value
+  const list = summary.last_month_types || []
+  if (!el || !list.length) return
+  let c = echarts.getInstanceByDom(el) || echarts.init(el)
+  c.clear()
+  const rows = [...list].sort((a, b) => a.value - b.value)
+  c.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 8, right: 34, top: 8, bottom: 8, containLabel: true },
+    xAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 11 } },
+    yAxis: { type: 'category', data: rows.map(r => r.name), axisLabel: { fontSize: 11, width: 90, overflow: 'truncate' } },
+    series: [{
+      type: 'bar',
+      barMaxWidth: 16,
+      itemStyle: { color: '#5b8def', borderRadius: [0, 4, 4, 0] },
+      label: { show: true, position: 'right', fontSize: 11 },
+      data: rows.map(r => r.value)
+    }]
+  })
+}
+
 function resize() {
-  ;[trendChart.value, pieType.value, pieApp.value].forEach(el => {
+  ;[trendChart.value, pieType.value, pieApp.value, yearChart.value, lastTypeChart.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
     if (c) c.resize()
   })
@@ -262,11 +395,12 @@ onMounted(async () => {
   await nextTick()
   loadTrend()
   loadDistribution()
+  loadSummary()
   // 待办 / 月度目标发生变更时，看板指标同步刷新
   window.addEventListener('itops:todo-changed', loadDashboard)
 })
 onBeforeUnmount(() => {
-  ;[trendChart.value, pieType.value, pieApp.value].forEach(el => {
+  ;[trendChart.value, pieType.value, pieApp.value, yearChart.value, lastTypeChart.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
     if (c) c.dispose()
   })
@@ -281,6 +415,17 @@ onBeforeUnmount(() => {
   .it-page { padding-right: 272px; }
 }
 .card-row { margin-bottom: 14px; }
+/* 上月汇总小卡 */
+.lm-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 14px; }
+.lm-item {
+  background: var(--it-card); border: 1px solid var(--it-border); border-radius: 10px;
+  padding: 12px 14px; border-left: 3px solid #c7d6f5;
+}
+.lm-item .lm-val { font-size: 22px; font-weight: 700; color: var(--it-text); line-height: 1.2; }
+.lm-item .lm-val small { font-size: 12px; font-weight: 500; color: var(--it-text-sub); margin-left: 2px; }
+.lm-item .lm-label { font-size: 12px; color: var(--it-text-sub); margin-top: 4px; }
+@media (max-width: 1100px) { .lm-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px) { .lm-row { grid-template-columns: repeat(2, 1fr); } }
 .extra-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .extra-item {
   display: flex; align-items: baseline; gap: 8px; padding: 9px 16px; cursor: pointer;

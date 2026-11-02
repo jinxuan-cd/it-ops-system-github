@@ -195,8 +195,21 @@
         <el-descriptions-item label="服务内容" :span="2">{{ detail.service_content }}</el-descriptions-item>
         <el-descriptions-item label="处理说明" :span="2">{{ detail.handle_desc }}</el-descriptions-item>
         <el-descriptions-item label="附件" :span="2">
-          <a v-for="(a, i) in (detail.attachment || [])" :key="i" :href="a" target="_blank" class="att-link">附件{{ i + 1 }} </a>
-          <span v-if="!detail.attachment || !detail.attachment.length">无</span>
+          <div v-if="detail.attachment && detail.attachment.length" class="att-wrap">
+            <template v-for="(a, i) in detail.attachment" :key="i">
+              <el-image
+                v-if="isImage(a)"
+                :src="a"
+                :preview-src-list="detail.attachment.filter(isImage)"
+                :initial-index="detail.attachment.filter(isImage).indexOf(a)"
+                fit="cover"
+                class="att-thumb"
+                preview-teleported
+                hide-on-click-modal />
+              <a v-else :href="a" target="_blank" class="att-link">附件{{ i + 1 }}</a>
+            </template>
+          </div>
+          <span v-else>无</span>
         </el-descriptions-item>
       </el-descriptions>
       <template #footer>
@@ -358,6 +371,10 @@ function baseParams() {
 
 const detailVisible = ref(false)
 const detail = ref(null)
+// 员工扫码报障会上传故障截图，详情里直接显示缩略图，点开可放大
+function isImage(u) {
+  return /\.(jpg|jpeg|png|webp|gif|bmp|heic)$/i.test(String(u || ''))
+}
 const editVisible = ref(false)
 const saving = ref(false)
 const editForm = reactive({})
@@ -683,6 +700,8 @@ onUnmounted(() => {
   .it-page { padding-right: 272px; }
 }
 .att-link { color: var(--it-primary); margin-right: 8px; }
+.att-wrap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.att-thumb { width: 68px; height: 68px; border-radius: 8px; border: 1px solid var(--it-border); cursor: zoom-in; }
 .batch-bar {
   display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 10px; padding: 10px 16px;

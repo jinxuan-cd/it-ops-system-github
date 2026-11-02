@@ -11,6 +11,17 @@ function scope(req) {
   return `AND user_id = ${req.user.user_id}`
 }
 
+// 工单口径：自己提的 + 指派/抢单给自己的。
+// 员工扫码报障的单 user_id = 0，若不带上 assignee_id，运维个人看板会漏掉自己处理的单
+function ticketScope(req) {
+  if (isViewAll(req.user.role) && req.query.all === '1') return { sql: '', params: [] }
+  const uid = Number(req.user.user_id)
+  return { sql: 'AND (user_id = ? OR assignee_id = ?)', params: [uid, uid] }
+}
+
+function pad2(n) { return String(n).padStart(2, '0') }
+function ymOf(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}` }
+
 // 指标卡片 + 今日工单 + 未完成待办 + 目标进度
 router.get('/', asyncHandler(async (req, res) => {
   const sc = scope(req)
@@ -144,6 +155,118 @@ router.get('/distribution', asyncHandler(async (req, res) => {
     `SELECT app_system AS name, COUNT(*) AS value FROM ticket WHERE app_system IS NOT NULL ${timeCond} ${sc} GROUP BY app_system ORDER BY value DESC`
   )
   ok(res, { problemType: pt, appSystem: as, range })
+}))
+
+// 汇总分析：上月 + 本年度（个人看板用，管理员带 all=1 则为全公司）
+router.get('/summary', asyncHandler(async (req, res) => {
+  const sc = ticketScope(req)
+  const now = new Date()
+  const thisYm = ymOf(now)
+  const lastYm = ymOf(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+  const year = now.getFullYear()
+
+  // 单月指标：受理量按发生时间，完成量按完成时间（与团队分析口径一致）
+  async function monthOf(ym) {
+    const rows = await query(
+      `SELECT
+         COUNT(*) AS accepted,
+         SUM(status = 'done') AS closed,
+         ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND finish_time > happen_time
+                        THEN TIMESTAMPDIFF(MINUTE, happen_time, finish_time) / 60 END), 1) AS avg_hours,
+         SUM(CASE WHEN status = 'done' AND sla_resolve_due IS NOT NULL AND finish_time > sla_resolve_due
+                  THEN 1 ELSE 0 END) AS sla_overdue,
+         ROUND(AVG(satisfy_score), 2) AS satisfy_avg,
+         SUM(satisfy_score IS NOT NULL) AS satisfy_cnt
+       FROM ticket
+       WHERE DATE_FORMAT(happen_time, '%Y-%m') = ? ${sc.sql}`,
+      [ym, ...sc.params]
+    )
+    const done = await query(
+      `SELECT COUNT(*) AS c FROM ticket
+       WHERE status = 'done' AND finish_time IS NOT NULL AND DATE_FORMAT(finish_time, '%Y-%m') = ? ${sc.sql}`,
+      [ym, ...sc.params]
+    )
+    const r = rows[0] || {}
+    const accepted = Number(r.accepted || 0)
+    const closed = Number(r.closed || 0)
+    return {
+      ym,
+      label: `${Number(ym.slice(5, 7))} 月`,
+      accepted,
+      done: Number((done[0] && done[0].c) || 0),
+      done_rate: accepted ? Math.round(closed / accepted * 100) : 0,
+      avg_hours: r.avg_hours === null || r.avg_hours === undefined ? null : Number(r.avg_hours),
+      sla_overdue: Number(r.sla_overdue || 0),
+      satisfy_avg: r.satisfy_avg === null || r.satisfy_avg === undefined ? null : Number(r.satisfy_avg),
+      satisfy_cnt: Number(r.satisfy_cnt || 0)
+    }
+  }
+
+  // 本年度按月：12 个月全部铺开，没有数据的月份补 0，避免图表跳月
+  async function yearOf(y) {
+    const rows = await query(
+      `SELECT DATE_FORMAT(happen_time, '%m') AS m, COUNT(*) AS c,
+              ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND finish_time > happen_time
+                             THEN TIMESTAMPDIFF(MINUTE, happen_time, finish_time) / 60 END), 1) AS h
+       FROM ticket WHERE YEAR(happen_time) = ? ${sc.sql}
+       GROUP BY DATE_FORMAT(happen_time, '%m')`,
+      [y, ...sc.params]
+    )
+    const doneRows = await query(
+      `SELECT DATE_FORMAT(finish_time, '%m') AS m, COUNT(*) AS c FROM ticket
+       WHERE status = 'done' AND finish_time IS NOT NULL AND YEAR(finish_time) = ? ${sc.sql}
+       GROUP BY DATE_FORMAT(finish_time, '%m')`,
+      [y, ...sc.params]
+    )
+    const map = new Map(rows.map(r => [String(r.m), r]))
+    const doneMap = new Map(doneRows.map(r => [String(r.m), Number(r.c)]))
+    const months = []
+    let totalAccepted = 0, totalDone = 0, hoursSum = 0, hoursCnt = 0
+    for (let m = 1; m <= 12; m++) {
+      const key = pad2(m)
+      const r = map.get(key)
+      const accepted = Number((r && r.c) || 0)
+      const done = doneMap.get(key) || 0
+      const avg = r && r.h !== null && r.h !== undefined ? Number(r.h) : null
+      totalAccepted += accepted
+      totalDone += done
+      if (avg !== null) { hoursSum += avg; hoursCnt += 1 }
+      months.push({ ym: `${y}-${key}`, label: `${m} 月`, accepted, done, avg_hours: avg })
+    }
+    return {
+      year: y,
+      months,
+      total_accepted: totalAccepted,
+      total_done: totalDone,
+      avg_hours: hoursCnt ? Math.round(hoursSum / hoursCnt * 10) / 10 : null
+    }
+  }
+
+  // 上月问题类别 TOP（个人看板用来回顾"上个月主要在忙什么"）
+  const typeRows = await query(
+    `SELECT problem_type AS name, COUNT(*) AS value FROM ticket
+     WHERE problem_type IS NOT NULL AND problem_type <> '' AND DATE_FORMAT(happen_time, '%Y-%m') = ? ${sc.sql}
+     GROUP BY problem_type ORDER BY value DESC LIMIT 8`,
+    [lastYm, ...sc.params]
+  )
+
+  const [lastMonth, thisMonth, yearStat] = await Promise.all([
+    monthOf(lastYm), monthOf(thisYm), yearOf(year)
+  ])
+
+  ok(res, {
+    last_month: lastMonth,
+    this_month: thisMonth,
+    // 环比（上月 → 本月）
+    diff: {
+      accepted: thisMonth.accepted - lastMonth.accepted,
+      done: thisMonth.done - lastMonth.done,
+      avg_hours: (thisMonth.avg_hours !== null && lastMonth.avg_hours !== null)
+        ? Math.round((thisMonth.avg_hours - lastMonth.avg_hours) * 10) / 10 : null
+    },
+    year: yearStat,
+    last_month_types: typeRows.map(r => ({ name: r.name, value: Number(r.value) }))
+  })
 }))
 
 module.exports = router

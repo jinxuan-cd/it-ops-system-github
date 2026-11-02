@@ -18,7 +18,10 @@
     reportKey: KEY,
     options: { dept: [], app_system: [], problem_type: [] },
     current: null,
-    score: 0
+    score: 0,
+    // 已上传成功的故障截图地址（最多 3 张）
+    attachments: [],
+    uploading: 0
   }
 
   // ---------------- 工具 ----------------
@@ -96,6 +99,7 @@
         }
 
         $('#tabs').hidden = false
+        renderDuty(c.duty_contacts || [])
         // 关掉某个入口时隐藏对应 Tab
         if (!c.report_enable) {
           $('[data-tab="report"]').hidden = true
@@ -117,6 +121,43 @@
         $('#loading').hidden = true
         showBlocked('暂时无法连接服务', e.message || '请稍后重试。')
       })
+  }
+
+  // ---------------- 值班 IT 联系方式（可点击拨打） ----------------
+  var PHONE_ICO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9">' +
+    '<path d="M6.5 3.5h3l1.5 4-2 1.4a12 12 0 0 0 6.1 6.1l1.4-2 4 1.5v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.5 5.7a2 2 0 0 1 2-2.2Z" stroke-linejoin="round"/></svg>'
+
+  function telHref(phone) {
+    return 'tel:' + String(phone || '').replace(/[^\d+]/g, '')
+  }
+
+  function renderDuty(list) {
+    var bar = $('#duty')
+    if (!bar) return
+    if (!list || !list.length) { bar.hidden = true; return }
+    bar.innerHTML = ''
+    list.slice(0, 2).forEach(function (c) {
+      var a = document.createElement('a')
+      a.className = 'duty-item'
+      a.href = telHref(c.phone)
+      a.innerHTML = '<span class="d-ico">' + PHONE_ICO + '</span>' +
+        '<span class="d-txt"><b>' + esc(c.name || 'IT 值班') + '</b>' +
+        '<i>' + esc(c.phone) + (c.note ? ' · ' + esc(c.note) : '') + '</i></span>' +
+        '<span class="d-call">拨打</span>'
+      bar.appendChild(a)
+    })
+    bar.hidden = false
+
+    var foot = $('#footDuty')
+    if (foot) {
+      var first = list[0]
+      foot.innerHTML = '如遇紧急故障，请直接电话联系 IT 值班：'
+      var fa = document.createElement('a')
+      fa.className = 'foot-tel'
+      fa.href = telHref(first.phone)
+      fa.textContent = (first.name ? first.name + ' ' : '') + first.phone
+      foot.appendChild(fa)
+    }
   }
 
   function showBlocked(title, desc) {
@@ -167,6 +208,8 @@
       if (!contact) { toast('请填写您的姓名', true); $('#fContact').focus(); return }
       if (text.length < 4) { toast('请简单描述遇到的问题', true); content.focus(); return }
 
+      if (state.uploading > 0) { toast('图片还在上传，请稍等两秒', true); return }
+
       var btn = $('#btnSubmit')
       btn.disabled = true
       btn.textContent = '提交中…'
@@ -180,7 +223,8 @@
           phone: $('#fPhone').value.trim(),
           app_system: $('#fSystem').value || '',
           priority: state.priority,
-          content: text
+          content: text,
+          attachment: state.attachments.slice(0, 3)
         }
       })
         .then(function (j) {
@@ -214,9 +258,133 @@
       $('#fPhone').value = ''
       $('#fSystem').value = ''
       state.priority = 'normal'
+      clearShots()
       $$('#priRow .pri-item').forEach(function (x) { x.classList.toggle('on', x.dataset.p === 'normal') })
       window.scrollTo({ top: 0, behavior: 'smooth' })
     })
+  }
+
+  // ---------------- 故障截图（可选，最多 3 张） ----------------
+  // 手机原图动辄 3~8MB，外网/分公司上传很慢，先在本地压到长边 1600px 再传
+  function compressImage(file, maxSide, quality) {
+    return new Promise(function (resolve) {
+      if (!file || !/^image\//.test(file.type) || /gif/i.test(file.type)) return resolve(file)
+      var img = new Image()
+      var url = URL.createObjectURL(file)
+      img.onload = function () {
+        URL.revokeObjectURL(url)
+        var w = img.naturalWidth || 0
+        var h = img.naturalHeight || 0
+        if (!w || !h) return resolve(file)
+        var scale = Math.min(1, maxSide / Math.max(w, h))
+        if (scale >= 1 && file.size < 900 * 1024) return resolve(file)
+        var cv = document.createElement('canvas')
+        cv.width = Math.round(w * scale)
+        cv.height = Math.round(h * scale)
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height)
+        if (!cv.toBlob) return resolve(file)
+        cv.toBlob(function (blob) { resolve(blob || file) }, 'image/jpeg', quality)
+      }
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file) }
+      img.src = url
+    })
+  }
+
+  function refreshShotUI() {
+    var box = $('#shots')
+    if (box) box.hidden = state.attachments.length + state.uploading === 0
+    var hint = $('#shotHint')
+    if (hint) {
+      var left = 3 - state.attachments.length - state.uploading
+      hint.textContent = state.uploading > 0
+        ? '正在上传图片…'
+        : (left > 0 ? '还可以上传 ' + left + ' 张，拍下报错弹窗更清楚' : '已达 3 张上限')
+    }
+    var pick = $('#btnPick')
+    var shot = $('#btnShot')
+    var full = state.attachments.length + state.uploading >= 3
+    if (pick) pick.disabled = full
+    if (shot) shot.disabled = full
+  }
+
+  function addShotItem(localUrl) {
+    var box = $('#shots')
+    var item = document.createElement('div')
+    item.className = 'shot uploading'
+    item.innerHTML = '<img alt="故障截图"><button type="button" class="shot-del" aria-label="删除">×</button>'
+    item.querySelector('img').src = localUrl
+    item.querySelector('.shot-del').addEventListener('click', function () {
+      if (item.dataset.url) {
+        state.attachments = state.attachments.filter(function (u) { return u !== item.dataset.url })
+      }
+      if (item.dataset.uploading === '1') state.uploading = Math.max(0, state.uploading - 1)
+      item.remove()
+      if (item.dataset.local) URL.revokeObjectURL(item.dataset.local)
+      refreshShotUI()
+    })
+    box.appendChild(item)
+    box.hidden = false
+    return item
+  }
+
+  function uploadShots(files) {
+    var list = Array.prototype.slice.call(files || [])
+    if (!list.length) return
+    var room = 3 - state.attachments.length - state.uploading
+    if (room <= 0) { toast('最多上传 3 张图片', true); return }
+    list.slice(0, room).forEach(function (f) {
+      if (!/^image\//.test(f.type)) { toast('只能上传图片', true); return }
+      state.uploading += 1
+      var localUrl = URL.createObjectURL(f)
+      var item = addShotItem(localUrl)
+      item.dataset.local = localUrl
+      item.dataset.uploading = '1'
+      refreshShotUI()
+      compressImage(f, 1600, 0.82).then(function (blob) {
+        var fd = new FormData()
+        var name = (f.name || 'shot').replace(/\.[^.]+$/, '') + '.jpg'
+        fd.append('files', blob, name)
+        return fetch(API + '/upload?k=' + encodeURIComponent(KEY), { method: 'POST', body: fd })
+          .then(function (r) { return r.json() })
+      }).then(function (j) {
+        if (!j || j.code !== 0) throw new Error((j && j.message) || '上传失败')
+        var url = (j.data && j.data[0]) || ''
+        if (!url) throw new Error('上传失败')
+        state.attachments.push(url)
+        item.dataset.url = url
+        item.dataset.uploading = ''
+        item.classList.remove('uploading')
+      }).catch(function (e) {
+        item.remove()
+        toast(e.message || '图片上传失败，可先不传图片直接提交', true)
+      }).then(function () {
+        state.uploading = Math.max(0, state.uploading - 1)
+        refreshShotUI()
+      })
+    })
+  }
+
+  function clearShots() {
+    state.attachments = []
+    state.uploading = 0
+    var box = $('#shots')
+    if (box) box.innerHTML = ''
+    refreshShotUI()
+  }
+
+  function bindShots() {
+    var pick = $('#filePick')
+    var shot = $('#fileShot')
+    $('#btnPick').addEventListener('click', function () { pick.click() })
+    $('#btnShot').addEventListener('click', function () { shot.click() })
+    ;[pick, shot].forEach(function (input) {
+      if (!input) return
+      input.addEventListener('change', function () {
+        uploadShots(input.files)
+        input.value = ''
+      })
+    })
+    refreshShotUI()
   }
 
   // ---------------- 查进度 ----------------
@@ -329,6 +497,13 @@
     $('#faqKw').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); loadFaq(this.value.trim()) }
     })
+    // 边输边搜（300ms 防抖），不用每次点按钮
+    var faqTimer = null
+    $('#faqKw').addEventListener('input', function () {
+      var v = this.value.trim()
+      clearTimeout(faqTimer)
+      faqTimer = setTimeout(function () { loadFaq(v) }, 300)
+    })
     $('#faqList').addEventListener('click', function (e) {
       var item = e.target.closest('.faq-item')
       if (!item) return
@@ -409,6 +584,7 @@
     b.addEventListener('click', function () { switchTab(b.dataset.tab) })
   })
   bindReport()
+  bindShots()
   bindTrack()
   bindFaq()
   boot()

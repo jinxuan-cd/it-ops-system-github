@@ -132,6 +132,7 @@ const menus = computed(() => {
           { path: '/projects', icon: 'FolderOpened', title: '项目管理', m: true }
         ] : []),
         { path: '/knowledge', icon: 'Reading', title: '个人运维知识库', m: true },
+        { path: '/faq-manage', icon: 'ChatDotSquare', title: '常见问题管理' },
         ...(notAuditor ? [
           { path: '/daily-report', icon: 'Notebook', title: '日报生成' },
           { path: '/monthly-report', icon: 'Document', title: '月度工作报告' },

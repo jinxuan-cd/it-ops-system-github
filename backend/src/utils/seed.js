@@ -283,7 +283,7 @@ async function settingSet(k, v) {
 // 这里在读接口按需补齐，保证任何部署形态都能自愈，且不依赖启动顺序。
 async function ensurePublicSettings() {
   const rows = await query(
-    "SELECT k, v FROM sys_setting WHERE k IN ('report_key','report_enable','faq_enable')"
+    "SELECT k, v FROM sys_setting WHERE k IN ('report_key','report_enable','faq_enable','duty_contacts')"
   )
   const map = {}
   rows.forEach(r => { map[r.k] = r.v })
@@ -297,10 +297,23 @@ async function ensurePublicSettings() {
   if (map.report_enable === undefined || map.report_enable === null) await settingSet('report_enable', '1')
   if (map.faq_enable === undefined || map.faq_enable === null) await settingSet('faq_enable', '1')
 
+  // 值班 IT 联系方式（1~2 人），门户上渲染成可点击拨打的按钮
+  let contacts = []
+  try {
+    const arr = JSON.parse(map.duty_contacts || '[]')
+    if (Array.isArray(arr)) {
+      contacts = arr
+        .filter(c => c && String(c.phone || '').trim())
+        .slice(0, 3)
+        .map(c => ({ name: String(c.name || '').slice(0, 20), phone: String(c.phone).slice(0, 30), note: String(c.note || '').slice(0, 30) }))
+    }
+  } catch { contacts = [] }
+
   return {
     key,
     report_enable: (map.report_enable === undefined || map.report_enable === null) ? true : map.report_enable === '1',
-    faq_enable: (map.faq_enable === undefined || map.faq_enable === null) ? true : map.faq_enable === '1'
+    faq_enable: (map.faq_enable === undefined || map.faq_enable === null) ? true : map.faq_enable === '1',
+    duty_contacts: contacts
   }
 }
 

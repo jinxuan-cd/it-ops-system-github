@@ -6,7 +6,7 @@
 const express = require('express')
 const router = express.Router()
 const { query } = require('../db')
-const { ok, asyncHandler } = require('../utils/helpers')
+const { ok, fail, asyncHandler } = require('../utils/helpers')
 const { auth, canViewAll } = require('../middleware/auth')
 
 // 仅管理员 / 审计员可访问
@@ -19,6 +19,10 @@ const RANGE_META = {
   last_month: { label: '上月', prevLabel: '上上月' },
   year: { label: '本年', prevLabel: '去年' }
 }
+
+// 工单归属人：已指派/已接单的算处理人，未指派的算提单人。
+// 员工扫码报障的单 user_id = 0，若不这样算，运维的完成量会全部漏掉
+const OWNER = 'COALESCE(assignee_id, NULLIF(user_id, 0))'
 
 // 生成时间条件（which: cur=本期 / prev=上一期）
 function cond(field, range, which = 'cur') {
@@ -161,19 +165,19 @@ async function userRankOf(range) {
             COALESCE(k.kb_cnt, 0)    AS kb_cnt
      FROM sys_user u
      LEFT JOIN (
-       SELECT user_id, COUNT(*) AS done_cnt,
+       SELECT ${OWNER} AS uid, COUNT(*) AS done_cnt,
               ROUND(AVG(CASE WHEN happen_time IS NOT NULL AND finish_time > happen_time
                              THEN TIMESTAMPDIFF(MINUTE, happen_time, finish_time) / 60 END), 1) AS avg_hours
        FROM ticket WHERE status = 'done' AND finish_time IS NOT NULL AND ${cond('finish_time', range)}
-       GROUP BY user_id
-     ) d ON d.user_id = u.user_id
+       GROUP BY ${OWNER}
+     ) d ON d.uid = u.user_id
      LEFT JOIN (
-       SELECT user_id, COUNT(*) AS accept_cnt, SUM(status = 'done') AS closed_cnt
-       FROM ticket WHERE ${cond('happen_time', range)} GROUP BY user_id
-     ) a ON a.user_id = u.user_id
+       SELECT ${OWNER} AS uid, COUNT(*) AS accept_cnt, SUM(status = 'done') AS closed_cnt
+       FROM ticket WHERE ${cond('happen_time', range)} GROUP BY ${OWNER}
+     ) a ON a.uid = u.user_id
      LEFT JOIN (
-       SELECT user_id, COUNT(*) AS backlog FROM ticket WHERE status <> 'done' GROUP BY user_id
-     ) b ON b.user_id = u.user_id
+       SELECT ${OWNER} AS uid, COUNT(*) AS backlog FROM ticket WHERE status <> 'done' GROUP BY ${OWNER}
+     ) b ON b.uid = u.user_id
      LEFT JOIN (
        SELECT user_id, COUNT(*) AS kb_cnt FROM knowledge GROUP BY user_id
      ) k ON k.user_id = u.user_id
@@ -251,6 +255,37 @@ async function overdueOf(limit = 20) {
     age_min: Number(r.age_min || 0),
     age_hours: Math.floor(Number(r.age_min || 0) / 60)
   }))
+}
+
+// 超期未闭环工单：分页取（首页只给 10 条，避免积压一多把整页拉长）
+async function overduePage(page = 1, size = 10, userId = 0) {
+  const p = Math.max(1, Number(page) || 1)
+  const s = Math.min(50, Math.max(1, Number(size) || 10))
+  const userCond = userId ? 'AND t.user_id = ?' : ''
+  const userParam = userId ? [userId] : []
+  const cnt = await query(
+    `SELECT COUNT(*) AS c FROM ticket t WHERE t.status <> 'done' AND t.happen_time IS NOT NULL ${userCond}`,
+    userParam
+  )
+  const rows = await query(
+    `SELECT t.ticket_id, t.user_id, u.real_name, t.happen_time, t.dept, t.app_system,
+            t.problem_type, t.service_content, t.status,
+            GREATEST(TIMESTAMPDIFF(MINUTE, t.happen_time, NOW()), 0) AS age_min
+     FROM ticket t LEFT JOIN sys_user u ON u.user_id = t.user_id
+     WHERE t.status <> 'done' AND t.happen_time IS NOT NULL ${userCond}
+     ORDER BY t.happen_time ASC LIMIT ? OFFSET ?`,
+    [...userParam, String(s), String((p - 1) * s)]
+  )
+  return {
+    list: rows.map(r => ({
+      ...r,
+      age_min: Number(r.age_min || 0),
+      age_hours: Math.floor(Number(r.age_min || 0) / 60)
+    })),
+    total: Number((cnt[0] && cnt[0].c) || 0),
+    page: p,
+    size: s
+  }
 }
 
 // 知识沉淀（团队视角）
@@ -340,7 +375,7 @@ async function incidentOf(range) {
 // 总览：一次返回看板所需的全部聚合数据
 router.get('/overview', asyncHandler(async (req, res) => {
   const range = RANGE_META[req.query.range] ? req.query.range : 'month'
-  const [cur, prev, backlog, trend, userRank, problemRank, appRank, deptRank, monthlyTrend, overdue, kb, sla, satisfy, incident] = await Promise.all([
+  const [cur, prev, backlog, trend, userRank, problemRank, appRank, deptRank, monthlyTrend, od, kb, sla, satisfy, incident] = await Promise.all([
     metricsOf(range, 'cur'),
     metricsOf(range, 'prev'),
     backlogOf(),
@@ -350,7 +385,7 @@ router.get('/overview', asyncHandler(async (req, res) => {
     rankOf('app_system', range, 10),
     rankOf('dept', range, 8),
     monthlyTrendOf(),
-    overdueOf(20),
+    overduePage(1, 10),
     knowledgeStat(range),
     slaOf(range),
     satisfyOf(range),
@@ -381,7 +416,8 @@ router.get('/overview', asyncHandler(async (req, res) => {
     appRank,
     deptRank,
     monthlyTrend,
-    overdue,
+    overdue: od.list,
+    overdue_total: od.total,
     sla,
     satisfy,
     incident
@@ -405,6 +441,116 @@ router.get('/user-tickets', asyncHandler(async (req, res) => {
     [userId]
   )
   ok(res, rows.map(r => ({ ...r, hours: r.hours == null ? null : Number(r.hours) })))
+}))
+
+// 超期未闭环工单：分页接口（团队分析右侧列表，积压再多也只占一屏）
+router.get('/overdue', asyncHandler(async (req, res) => {
+  const data = await overduePage(req.query.page, req.query.size, Number(req.query.user_id) || 0)
+  ok(res, data)
+}))
+
+// 人员维度分析：选定一个员工，只看他自己的工单情况
+router.get('/person', asyncHandler(async (req, res) => {
+  const userId = Number(req.query.user_id)
+  if (!userId) return fail(res, '请先选择员工')
+  const range = RANGE_META[req.query.range] ? req.query.range : 'month'
+  const users = await query('SELECT user_id, username, real_name, role, is_enable FROM sys_user WHERE user_id = ?', [userId])
+  if (!users.length) return fail(res, '员工不存在')
+  const u = users[0]
+
+  const bucket = range === 'today'
+    ? `DATE_FORMAT(happen_time, '%H')`
+    : (range === 'last_month' || range === 'year' ? `DATE_FORMAT(happen_time, '%Y-%m')` : `DATE_FORMAT(happen_time, '%Y-%m-%d')`)
+  const doneBucket = bucket.replace(/happen_time/g, 'finish_time')
+
+  const [base, doneRow, backlog, overdueSla, satisfyRow, typeRows, appRows, acceptRows, doneRows, recent, kbRow] = await Promise.all([
+    query(
+      `SELECT COUNT(*) AS accepted, SUM(status = 'done') AS closed,
+              SUM(status = 'pending') AS pending, SUM(status = 'processing') AS processing
+       FROM ticket WHERE ${OWNER} = ? AND ${cond('happen_time', range)}`, [userId]
+    ),
+    query(
+      `SELECT COUNT(*) AS done,
+              ROUND(AVG(CASE WHEN happen_time IS NOT NULL AND finish_time > happen_time
+                             THEN TIMESTAMPDIFF(MINUTE, happen_time, finish_time) / 60 END), 1) AS avg_hours,
+              SUM(CASE WHEN sla_resolve_due IS NOT NULL AND finish_time > sla_resolve_due THEN 1 ELSE 0 END) AS sla_overdue
+       FROM ticket WHERE ${OWNER} = ? AND status = 'done' AND finish_time IS NOT NULL AND ${cond('finish_time', range)}`,
+      [userId]
+    ),
+    query(
+      `SELECT COUNT(*) AS backlog,
+              SUM(happen_time IS NOT NULL AND happen_time < DATE_SUB(NOW(), INTERVAL 24 HOUR)) AS over24,
+              SUM(happen_time IS NOT NULL AND happen_time < DATE_SUB(NOW(), INTERVAL 72 HOUR)) AS over72
+       FROM ticket WHERE ${OWNER} = ? AND status <> 'done'`, [userId]
+    ),
+    query(
+      `SELECT COUNT(*) AS c FROM ticket
+       WHERE ${OWNER} = ? AND status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()`, [userId]
+    ),
+    query(
+      `SELECT ROUND(AVG(satisfy_score), 2) AS avg_score, COUNT(*) AS cnt FROM ticket
+       WHERE ${OWNER} = ? AND satisfy_score IS NOT NULL AND ${cond('finish_time', range)}`, [userId]
+    ),
+    query(
+      `SELECT problem_type AS name, COUNT(*) AS value FROM ticket
+       WHERE ${OWNER} = ? AND problem_type IS NOT NULL AND problem_type <> '' AND ${cond('happen_time', range)}
+       GROUP BY problem_type ORDER BY value DESC LIMIT 8`, [userId]
+    ),
+    query(
+      `SELECT app_system AS name, COUNT(*) AS value FROM ticket
+       WHERE ${OWNER} = ? AND app_system IS NOT NULL AND app_system <> '' AND ${cond('happen_time', range)}
+       GROUP BY app_system ORDER BY value DESC LIMIT 8`, [userId]
+    ),
+    query(`SELECT ${bucket} AS b, COUNT(*) AS c FROM ticket WHERE ${OWNER} = ? AND ${cond('happen_time', range)} GROUP BY b`, [userId]),
+    query(
+      `SELECT ${doneBucket} AS b, COUNT(*) AS c FROM ticket
+       WHERE ${OWNER} = ? AND status = 'done' AND finish_time IS NOT NULL AND ${cond('finish_time', range)} GROUP BY b`, [userId]
+    ),
+    query(
+      `SELECT ticket_id, report_no, happen_time, finish_time, dept, app_system, problem_type,
+              service_content, status, priority,
+              CASE WHEN status = 'done' AND happen_time IS NOT NULL AND finish_time >= happen_time
+                   THEN ROUND(TIMESTAMPDIFF(MINUTE, happen_time, finish_time) / 60, 1) END AS hours
+       FROM ticket WHERE ${OWNER} = ? AND ((${cond('happen_time', range)}) OR (status = 'done' AND ${cond('finish_time', range)}))
+       ORDER BY happen_time DESC, ticket_id DESC LIMIT 10`, [userId]
+    ),
+    query('SELECT COUNT(*) AS c FROM knowledge WHERE user_id = ?', [userId])
+  ])
+
+  const b = base[0] || {}
+  const d = doneRow[0] || {}
+  const bk = backlog[0] || {}
+  const accepted = Number(b.accepted || 0)
+  const closed = Number(b.closed || 0)
+
+  const map = new Map()
+  bucketsOf(range).forEach(k => map.set(k, { key: k, accepted: 0, done: 0 }))
+  acceptRows.forEach(r => { if (map.has(r.b)) map.get(r.b).accepted = Number(r.c) })
+  doneRows.forEach(r => { if (map.has(r.b)) map.get(r.b).done = Number(r.c) })
+
+  ok(res, {
+    range,
+    range_label: RANGE_META[range].label,
+    user: { user_id: u.user_id, username: u.username, real_name: u.real_name, role: u.role, is_enable: u.is_enable },
+    metrics: {
+      accepted,
+      done: Number(d.done || 0),
+      done_rate: accepted ? Math.round(closed / accepted * 100) : 0,
+      avg_hours: d.avg_hours === null || d.avg_hours === undefined ? null : Number(d.avg_hours),
+      sla_overdue: Number(d.sla_overdue || 0),
+      backlog: Number(bk.backlog || 0),
+      over24: Number(bk.over24 || 0),
+      over72: Number(bk.over72 || 0),
+      overdue_now: Number((overdueSla[0] && overdueSla[0].c) || 0),
+      satisfy_avg: Number((satisfyRow[0] && satisfyRow[0].avg_score) || 0),
+      satisfy_cnt: Number((satisfyRow[0] && satisfyRow[0].cnt) || 0),
+      kb_cnt: Number((kbRow[0] && kbRow[0].c) || 0)
+    },
+    trend: [...map.values()],
+    problemRank: typeRows.map(r => ({ name: r.name, value: Number(r.value) })),
+    appRank: appRows.map(r => ({ name: r.name, value: Number(r.value) })),
+    recent: recent.map(r => ({ ...r, hours: r.hours == null ? null : Number(r.hours) }))
+  })
 }))
 
 // 数据体检：找出会影响统计口径的异常数据（只读）

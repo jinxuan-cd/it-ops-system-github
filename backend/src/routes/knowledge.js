@@ -43,6 +43,8 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   if (app_system) { where.push('app_system = ?'); params.push(app_system) }
   if (problem_type) { where.push('problem_type = ?'); params.push(problem_type) }
+  // 只看已公开到自助门户的条目（常见问题管理页用）
+  if (req.query.public === '1') where.push('is_public = 1')
   if (keyword) {
     where.push('(problem_summary LIKE ? OR solution LIKE ? OR keyword LIKE ?)')
     params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`)
