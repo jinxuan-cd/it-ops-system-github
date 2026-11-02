@@ -1,3 +1,13 @@
+<!--
+  故障事件管理 —— IT 运维工单台账与日报自动管理系统
+  重大故障登记、影响范围与处理过程记录
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -12,6 +22,7 @@
     </div>
 
     <!-- 统计（没有故障记录时整块不显示） -->
+    <!-- 统计与下方列表共用同一套筛选参数，保证数字和记录对得上 -->
     <el-row v-if="stats.total > 0" :gutter="14" class="card-row">
       <el-col :xs="12" :sm="6">
         <div class="metric-card blue">
@@ -39,6 +50,7 @@
       </el-col>
     </el-row>
 
+    <!-- 筛选：时间按「发生时间」过滤，级别/状态/关键词可叠加 -->
     <div class="it-card" style="margin-bottom:14px">
       <el-form :inline="true">
         <el-form-item label="时间">
@@ -142,6 +154,7 @@
     </div>
 
     <!-- 新增 / 编辑 -->
+    <!-- 恢复时间被清空时状态会自动回退为「未恢复」，提示见 onFinishChange -->
     <el-dialog v-model="formVisible" :title="form.incident_id ? '编辑故障' : '登记故障'" width="720px" top="6vh">
       <el-form :model="form" label-width="96px">
         <el-form-item label="故障标题" required>
@@ -156,6 +169,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="16">
+            <!-- 影响范围是固定枚举而非自由文本：否则同一件事会被写成七八种说法，统计无法归口 -->
             <el-form-item label="影响范围">
               <el-select v-model="form.scope" placeholder="选择影响范围" clearable style="width:100%">
                 <el-option v-for="s in SCOPES" :key="s" :label="s" :value="s" />
@@ -204,6 +218,7 @@
     </el-dialog>
 
     <!-- 详情 -->
+    <!-- 抽屉里把原因 / 处理过程 / 复盘拆成三段，方便事后复盘与向上汇报 -->
     <el-drawer v-model="detailVisible" title="故障详情" size="520px" direction="rtl">
       <template v-if="detail">
         <div class="d-title">{{ detail.title }}</div>
@@ -247,11 +262,13 @@ import R from '../api'
 import { useUserStore } from '../store/user'
 
 const userStore = useUserStore()
+// 审计员只读：登记、编辑、删除三个入口都由它控制显隐
 const canWrite = computed(() => !userStore.isAuditor)
 
 // 影响范围固定为选项，便于统计（人数规模 / 部门范围两类，二选一）
 const SCOPES = ['5人以下', '5-10人', '10-30人', '30人以上', '单部门', '全公司']
 
+// 故障等级：只在展示层做文案与配色映射，库里存的是 P1~P4 字符串
 const LEVELS = [
   { value: 'P1', label: 'P1 致命（业务全停）' },
   { value: 'P2', label: 'P2 严重（核心业务受损）' },
@@ -259,31 +276,42 @@ const LEVELS = [
   { value: 'P4', label: 'P4 轻微（几乎无感）' }
 ]
 
+// 列表数据与 loading 分离，刷新时保留旧数据避免闪空
 const rows = ref([])
 const loading = ref(false)
 // 窄屏隐藏次要列，避免表格横向溢出（时间列已合并发生/接单/恢复三段）
+// 断点与其它列表页保持一致（820px）
 const isMobile = ref(window.innerWidth <= 820)
 function onResize() { isMobile.value = window.innerWidth <= 820 }
+// 时间区间与级别/状态/关键词筛选
 const range = ref([])
 const filters = reactive({ level: '', status: '', keyword: '' })
+// 顶部四个统计数字，与列表同一次查询条件算出来的
 const stats = reactive({ total: 0, ongoing: 0, serious: 0, avg_hours: 0 })
 
+// 弹窗显隐与保存中状态
 const formVisible = ref(false)
 const saving = ref(false)
+// 空对象起步：新增/编辑都先清空再赋值，避免残留上一条记录的字段
 const form = reactive({})
 // 可编辑字段白名单（其余字段是后端推导出来的，不参与提交）
 const SAVE_FIELDS = ['title', 'level', 'scope', 'affected_systems', 'start_time', 'accept_time', 'finish_time', 'cause', 'process', 'review']
 // 恢复时间被清空 → 提示保存后状态会回退，避免「已恢复却没有恢复时间」
+// 只做提示不做拦截：用户确实可能先清空再重填
 const finishCleared = ref(false)
 function onFinishChange(v) { finishCleared.value = !v }
 
+// 详情抽屉的数据与显隐
 const detailVisible = ref(false)
 const detail = ref(null)
 
+// 级别染色：P1 红 / P2 橙 / P3 蓝 / P4 灰，列表与详情共用一套
 function levelType(l) {
   return l === 'P1' ? 'danger' : l === 'P2' ? 'warning' : l === 'P3' ? 'primary' : 'info'
 }
+// 列表里的时间只留 MM-DD HH:mm，年份由筛选区间隐含，省横向空间
 function fmt(t) { return t ? String(t).slice(5, 16) : '—' }
+// 历时统一成「x 小时 y 分」；超过一小时不再只显示分钟数，便于对外说明
 function durText(min) {
   if (min == null) return '—'
   if (min < 60) return min + ' 分钟'
@@ -292,6 +320,7 @@ function durText(min) {
   return m ? `${h} 小时 ${m} 分` : `${h} 小时`
 }
 
+// 查询参数：只有能看全员的人才带 all=1，普通账号由后端限定为本人登记
 function params() {
   const p = {}
   if (userStore.canViewAll) p.all = 1
@@ -302,6 +331,7 @@ function params() {
   return p
 }
 
+// 列表与统计并行请求：任一失败都提示，避免出现「有数字没记录」的半更新状态
 async function load() {
   loading.value = true
   try {
@@ -311,12 +341,15 @@ async function load() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 清空全部筛选条件后立即重查
 function resetFilters() {
   range.value = []
   Object.assign(filters, { level: '', status: '', keyword: '' })
   load()
 }
 
+// 新建默认 P3、发生时间取当前分钟：符合「先登记、细节后补」的实际习惯，
+// 也避免用户为了填一个时间字段放弃登记
 function openCreate() {
   Object.keys(form).forEach(k => delete form[k])
   finishCleared.value = false
@@ -326,12 +359,15 @@ function openCreate() {
   form.start_time = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}:00`
   formVisible.value = true
 }
+// 编辑直接回填整行，提交时再按白名单裁剪（见 onSave 里的说明）
 function openEdit(row) {
   Object.keys(form).forEach(k => delete form[k])
   Object.assign(form, row)
   finishCleared.value = false
   formVisible.value = true
 }
+// 业务口径：恢复时间不得早于发生时间。前端不重复拦截，由后端在保存时
+// 把早于发生时间的恢复时间纠正为发生时间，否则平均恢复时长会被算成负数
 async function onSave() {
   if (!form.title) return ElMessage.warning('请填写故障标题')
   saving.value = true
@@ -347,6 +383,7 @@ async function onSave() {
     load()
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
 }
+// 物理删除：带标题二次确认，避免和「已恢复」这条记录混淆
 async function onDelete(row) {
   try {
     await ElMessageBox.confirm(`确认删除故障「${row.title}」？`, '提示', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
@@ -357,6 +394,7 @@ async function onDelete(row) {
     load()
   } catch (e) { ElMessage.error(e.message) }
 }
+// 详情直接用列表行：列表已返回原因/过程/复盘全文
 function openDetail(row) {
   detail.value = row
   detailVisible.value = true

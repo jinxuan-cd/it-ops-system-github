@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/monthlyReport.js
+ * @description 按月生成月报、历史查询、团队月报查阅
+ *
+ * 月报路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const { query } = require('../db')
@@ -9,6 +21,16 @@ const { toPlain } = require('../utils/text')
 router.use(auth)
 
 // ---------------- 统计聚合 ----------------
+/**
+ * 收集某员工某月的全部事实材料：工单量、类别/系统分布、目标完成、在办项目、当月日报摘录。
+ * 口径：工单按 happen_time 归月（当月受理），完成数与平均时长也只在这批工单里取，
+ *      所以「上月报、本月完成」的单不计入本月月报 —— 月报看的是「本月受理的活干成什么样」。
+ * 项目只要「在办」或「本月结束 / 本月更新过」就带上，避免月报漏掉跨月项目。
+ *
+ * @param {number} userId 员工 ID
+ * @param {string} month 形如 2026-10
+ * @returns {Promise<{ticket: object, byType: object[], bySystem: object[], goal: object, projects: object[], dailyReports: object[]}>}
+ */
 async function buildStats(userId, month) {
   const ticket = await query(
     `SELECT COUNT(*) AS total,
@@ -58,6 +80,14 @@ async function buildStats(userId, month) {
 }
 
 // 无 AI 时的规则兜底文本
+/**
+ * 规则版月报：固定四段（概览/项目/目标/问题），AI 不可用时保证月报功能照常可用。
+ * 数据全部来自 buildStats，不额外查库，保证两种生成方式口径一致。
+ *
+ * @param {string} month
+ * @param {object} s buildStats 的返回值
+ * @returns {string} 纯文本
+ */
 function buildFallbackText(month, s) {
   const t = s.ticket || {}
   const g = s.goal || {}
@@ -91,6 +121,15 @@ function buildFallbackText(month, s) {
 }
 
 // AI 生成向上汇报风格的月度报告
+/**
+ * 让模型把统计事实写成五段式月报（概览/成果/项目/问题/建议）。
+ * 明确要求纯文本与固定标题，是为了能直接粘进 OA、也便于年底按标题汇总成年度报告。
+ *
+ * @param {string} month
+ * @param {object} s buildStats 的返回值
+ * @param {{baseURL: string, apiKey: string, model: string}} cfg 本人 AI 配置
+ * @returns {Promise<string>} 模型返回的原始文本（调用方再统一清成纯文本）
+ */
 async function aiMonthlyReport(month, s, cfg) {
   const fact = []
   const t = s.ticket || {}
@@ -131,6 +170,15 @@ ${fact.join('\n')}`
 }
 
 // 生成（或重新生成）某月报告并入库
+/**
+ * 生成月报主流程：取数 → 有 AI 用 AI → 没有或失败用规则兜底 → 清成纯文本 → 按月 upsert 入库。
+ * 幂等：同一人同一月只有一条（report_month + user_id 唯一），重新生成即覆盖，不会堆重复记录。
+ *
+ * @param {number} userId
+ * @param {string} month 形如 2026-10
+ * @param {{useAi?: boolean}} options useAi=false 时强制走规则版（定时任务与重算用）
+ * @returns {Promise<{content: string, stats: object, ai_used: boolean}>}
+ */
 async function generateMonthReport(userId, month, { useAi = true } = {}) {
   const stats = await buildStats(userId, month)
   let content = ''
@@ -160,6 +208,14 @@ async function generateMonthReport(userId, month, { useAi = true } = {}) {
 
 // ---------------- 路由 ----------------
 // 生成/重新生成
+/**
+ * 生成指定月份的月报（本人）。
+ * 权限：登录用户，只能生成自己的；month 必须是 YYYY-MM，防止拼出非法月份把数据算空。
+ *
+ * @param {import('express').Request} req body.month
+ * @param {import('express').Response} res { content, stats, ai_used }
+ * @returns {Promise<void>}
+ */
 router.post('/generate', asyncHandler(async (req, res) => {
   const month = (req.body.month || '').trim()
   if (!/^\d{4}-\d{2}$/.test(month)) return fail(res, '月份格式应为 YYYY-MM')
@@ -168,6 +224,14 @@ router.post('/generate', asyncHandler(async (req, res) => {
 }))
 
 // 获取已存报告
+/**
+ * 读取已生成的月报，没生成过返回 null（前端据此显示「去生成」按钮）。
+ * 权限：仅本人。
+ *
+ * @param {import('express').Request} req query.month
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const month = (req.query.month || '').trim()
   if (!/^\d{4}-\d{2}$/.test(month)) return fail(res, '月份格式应为 YYYY-MM')
@@ -180,6 +244,14 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 历史列表
+/**
+ * 我的月报历史：按月份倒序最多 36 条（三年），只取正文前 80 字做预览，避免列表接口传大文本。
+ * 权限：仅本人。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/history', asyncHandler(async (req, res) => {
   const rows = await query(
     'SELECT report_id, report_month, LEFT(content, 80) AS preview, update_time FROM monthly_report WHERE user_id = ? ORDER BY report_month DESC LIMIT 36',
@@ -189,11 +261,25 @@ router.get('/history', asyncHandler(async (req, res) => {
 }))
 
 // ---------------- 月底自动生成（供 index.js 定时调用） ----------------
+/**
+ * 判断今天是否本月最后一天（用「明天是否换月」判断，比写死 28/30/31 更稳）。
+ *
+ * @param {Date} d
+ * @returns {boolean}
+ */
 function isLastDayOf_month(d = new Date()) {
   const tmr = new Date(d)
   tmr.setDate(d.getDate() + 1)
   return tmr.getMonth() !== d.getMonth()
 }
+
+/**
+ * 月底自动生成全员月报，由定时任务反复调用（自己判断是否该执行）。
+ * 只在「本月最后一天 17:00 之后」跑，且已存在月报的人直接跳过 —— 不覆盖用户手改过的内容；
+ * 单人失败只记日志，不影响其他人的生成。
+ *
+ * @returns {Promise<void>}
+ */
 async function autoGenerateMonthEnd() {
   const now = new Date()
   if (!isLastDayOf_month(now) || now.getHours() < 17) return
@@ -214,6 +300,15 @@ async function autoGenerateMonthEnd() {
 
 // ---------------- 团队月报查阅（管理员 / 审计员） ----------------
 // 某月的全员月报 + 未提交名单
+/**
+ * 团队月报总览：某月已提交的月报列表 + 未提交名单 + 应提交人数。
+ * 权限：管理员 / 审计员。月份不合法时回落本月，避免一开页面就报错。
+ * 口径：应提交与未提交都按「启用且非审计员」算，两边条件必须一致，否则人数对不上。
+ *
+ * @param {import('express').Request} req query.month / user_id / keyword
+ * @param {import('express').Response} res { month, list, total, expected, missing }
+ * @returns {Promise<void>}
+ */
 router.get('/team', canViewAll, asyncHandler(async (req, res) => {
   const month = /^\d{4}-\d{2}$/.test(req.query.month || '')
     ? req.query.month
@@ -250,6 +345,14 @@ router.get('/team', canViewAll, asyncHandler(async (req, res) => {
 }))
 
 // 团队月报详情
+/**
+ * 单份月报详情（全文），供管理员查看。
+ * 权限：管理员 / 审计员。
+ *
+ * @param {import('express').Request} req req.params.id 为 report_id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/team/:id', canViewAll, asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT m.*, u.real_name, u.username, u.role FROM monthly_report m

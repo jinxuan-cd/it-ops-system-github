@@ -1,8 +1,19 @@
+<!--
+  AI 助手 —— IT 运维工单台账与日报自动管理系统
+  运维问答与内容生成对话界面
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <h3 class="it-section-title">AI 助手</h3>
 
     <!-- 状态横幅 -->
+    <!-- 标题/类型/说明全部由 configBanner 计算：只要地址+模型齐全且已启用就算「AI 可用」 -->
     <el-alert
       :title="configBanner.title"
       :type="configBanner.type"
@@ -29,6 +40,8 @@
               </el-select>
             </el-form-item>
             <el-form-item label="API 地址">
+              <!-- 踩坑提醒写在界面上，不只是注释：后端跑在 Docker 容器里，
+                   localhost 指向容器自身而不是宿主机，填了就一定连不上 -->
               <div style="width:100%">
                 <el-input v-model="cfg.api_url" placeholder="如 http://host.docker.internal:1234/v1 或 https://api.deepseek.com/v1" />
                 <div class="field-tip">
@@ -59,6 +72,8 @@
         <el-col :md="12">
           <el-form label-width="92px">
             <el-form-item label="Token">
+              <!-- 后端从不回传明文 Token，只用 has_key 标记「已保存」；
+                   留空提交表示沿用原值，填了新值才覆盖 —— 所以输入框每次进页面都是空的 -->
               <el-input
                 v-model="cfg.api_key"
                 type="password"
@@ -80,6 +95,8 @@
 
     <el-row :gutter="16">
       <!-- 智能日报 -->
+      <!-- 三个任务卡片都是「有 AI 走 AI、没 AI 走规则汇总」：
+           未配置时不报错、不置灰，只是退回模板化输出，保证功能始终可用 -->
       <el-col :md="8">
         <div class="it-card ai-card">
           <div class="ai-icon blue"><el-icon><Notebook /></el-icon></div>
@@ -115,6 +132,8 @@
     </el-row>
 
     <!-- 结果区 -->
+    <!-- 三个任务共用一个结果面板，谁有结果就显示谁；日报/月报给可编辑的只读文本框，
+         知识库整理只回一条说明（结果本身在知识库页面里） -->
     <div class="it-card" style="margin-top:16px" v-if="dailyResult || monthResult || kbResult">
       <h4 class="it-section-title">执行结果</h4>
 
@@ -146,6 +165,8 @@ import R from '../api'
 const router = useRouter()
 
 // ---------------- 每用户 AI 配置 ----------------
+// 供应商预设：选一个就把地址与默认模型填好。url 一律只填到 /v1，
+// /chat/completions 由后端补全，避免用户手填重复或漏填
 const providers = [
   { label: 'DeepSeek', value: 'deepseek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   { label: 'OpenAI', value: 'openai', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
@@ -157,11 +178,14 @@ const providers = [
   { label: '自定义 / 其他 OpenAI 兼容', value: 'custom', url: '', model: '' }
 ]
 
+// 配置表单：has_key 表示后端已存过 Token（输入框不回显明文），configured 表示已保存过配置
 const cfg = reactive({ provider: 'deepseek', api_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', api_key: '', is_enable: true, has_key: false, configured: false })
 const savingCfg = ref(false)
 const testing = ref(false)
+// 测试连接的即时反馈：testMsg 是文案，testOk 决定红/绿
 const testMsg = ref('')
 const testOk = ref(false)
+// 「获取模型」拉回的候选列表，只做下拉选项，不强制必须从中选（allow-create 支持手填）
 const modelOptions = ref([])
 const loadingModels = ref(false)
 
@@ -177,6 +201,7 @@ function applyPreset(val) {
   }
 }
 
+// 读取本人配置；失败时保留默认值（等价于未配置，仍可用规则汇总）
 async function loadConfig() {
   try {
     const d = await R.getAiConfig()
@@ -184,6 +209,8 @@ async function loadConfig() {
   } catch (e) {}
 }
 
+// 保存配置：地址与模型必填（Token 对本地模型可空）。
+// 提交后主动清空 api_key 输入框——密钥已经落到后端，没必要继续留在页面内存里
 async function saveConfig() {
   if (!cfg.api_url || !cfg.model) { ElMessage.warning('API 地址与模型为必填'); return }
   savingCfg.value = true
@@ -204,6 +231,8 @@ async function saveConfig() {
   } catch (e) { ElMessage.error(e.message) } finally { savingCfg.value = false }
 }
 
+// 测试连接：成功后如果后端纠正了地址（补全路径 / 替换 localhost），
+// 自动回填并提示用户再点一次保存，否则测通了但存下去的还是错地址
 async function testConnection() {
   if (!cfg.api_url || !cfg.model) {
     ElMessage.warning('请先填写 API 地址与模型（本地模型可留空 Token）'); return
@@ -243,6 +272,8 @@ async function fetchModels() {
   } finally { loadingModels.value = false }
 }
 
+// 横幅结论只认「启用 + 地址 + 模型」三件套，与是否填了 Token 无关：
+// 本地模型（LM Studio / Ollama）不需要密钥
 const configBanner = computed(() => {
   const p = providers.find(x => x.value === cfg.provider)
   const ready = !!(cfg.is_enable && cfg.api_url && cfg.model)
@@ -257,11 +288,14 @@ const configBanner = computed(() => {
 })
 
 // ---------------- 任务 ----------------
+// 三个任务的状态各自独立：结果、提示语、是否真的调了 AI（*Ai 决定提示条的绿/蓝）。
+// 分开存是为了让日报和月报的结果可以同时留在页面上对比
 const dailyLoading = ref(false)
 const dailyResult = ref('')
 const dailyNote = ref('')
 const dailyAi = ref(false)
 
+// 默认选当月（YYYY-MM），月报接口只认这个格式
 const month = ref(currentMonth())
 const monthLoading = ref(false)
 const monthResult = ref('')
@@ -279,6 +313,8 @@ function currentMonth() {
 }
 function goPage(p) { router.push(p) }
 
+// 生成今日日报：后端回三段字段，前端只负责拼成「[今日]/[协调]/[计划]」，
+// 空段直接丢掉，避免出现空标题；ai_used 为 false 就是规则汇总的版本
 async function genDaily() {
   dailyLoading.value = true
   try {
@@ -293,6 +329,7 @@ async function genDaily() {
   } catch (e) { ElMessage.error(e.message) } finally { dailyLoading.value = false }
 }
 
+// 生成月报：必须显式选月份，空值直接拦下，不默认成当月（防止误覆盖已有月报）
 async function genMonth() {
   if (!month.value) { ElMessage.warning('请选择月份'); return }
   monthLoading.value = true
@@ -307,6 +344,8 @@ async function genMonth() {
   } catch (e) { ElMessage.error(e.message) } finally { monthLoading.value = false }
 }
 
+// 知识库整理：不返回正文，kbResult 只是「有结果」的哨兵值，
+// 用来把结果区撑开并显示后端给出的条数说明
 async function organizeKb() {
   kbLoading.value = true
   try {

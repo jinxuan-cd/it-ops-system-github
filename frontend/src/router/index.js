@@ -1,5 +1,19 @@
+/**
+ * @file frontend/src/router/index.js
+ * @description 路由表定义，以及登录态、管理员、查看全部、只读账号的访问控制
+ *
+ * 路由与权限守卫 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 import { createRouter, createWebHistory } from 'vue-router'
 
+// 从 localStorage 读角色：守卫在组件挂载前就要跑，此时 Pinia 可能还没初始化，只能直接读存储。
+// 解析失败按「无角色」处理，宁可拦下来也不能放行
 function roleOf() {
   try {
     const u = JSON.parse(localStorage.getItem('itops_user') || 'null')
@@ -7,11 +21,18 @@ function roleOf() {
   } catch (e) { return '' }
 }
 
+// 路由分层：
+//   meta.public —— 免登录可访问（登录页、扫码报障、常见问题门户）
+//   meta.admin  —— 仅 admin（用户/字典/SLA 这类系统配置）
+//   meta.viewAll—— admin + auditor（团队分析与审计日志属于「看全员数据」）
+//   meta.write  —— 除 auditor 外可进（审计员是只读账号，写操作页面直接拦掉）
+// 其余未标 meta 的页面只要登录即可
 const routes = [
   { path: '/login', name: 'Login', component: () => import('../views/Login.vue'), meta: { public: true } },
   // 免登录：扫码报障入口 + 常见问题自助门户（对外分享用，不需要账号）
   { path: '/report', name: 'PublicReport', component: () => import('../views/PublicReport.vue'), meta: { public: true } },
   { path: '/faq', name: 'PublicFaq', component: () => import('../views/PublicFaq.vue'), meta: { public: true } },
+  // 后台业务页统一挂在 MainLayout 下（侧边栏 + 顶栏 + 待办面板），默认落到数据看板
   {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
@@ -21,6 +42,7 @@ const routes = [
       // 团队运营分析：管理员 / 审计员
       { path: 'analytics', name: 'Analytics', component: () => import('../views/Analytics.vue'), meta: { viewAll: true } },
       { path: 'ticket-create', name: 'TicketCreate', component: () => import('../views/TicketCreate.vue'), meta: { write: true } },
+      // 工单记录管理：所有登录用户都能进，能看到哪些单由后端按角色过滤（工程师默认只看自己名下）
       { path: 'tickets', name: 'TicketManage', component: () => import('../views/TicketManage.vue') },
       { path: 'incidents', name: 'IncidentManage', component: () => import('../views/IncidentManage.vue'), meta: { write: true } },
       { path: 'inspections', name: 'Inspection', component: () => import('../views/Inspection.vue'), meta: { write: true } },
@@ -47,21 +69,23 @@ const routes = [
 ]
 
 const router = createRouter({
+  // history 模式：URL 里没有 #，二维码/分享链接更干净；代价是部署时要配 try_files 回退到 index.html
   history: createWebHistory(),
   routes
 })
 
 router.beforeEach((to) => {
   const token = localStorage.getItem('itops_token')
+  // 第一层：登录态。非 public 页没 token 一律去登录页；已登录再访问 /login 就回看板
   if (!to.meta.public && !token) return { path: '/login' }
   if (to.path === '/login' && token) return { path: '/dashboard' }
 
   const role = roleOf()
-  // 管理员专属页面
+  // 第二层：管理员专属页面（用户管理、字典、SLA）
   if (to.meta.admin && role !== 'admin') return { path: '/dashboard' }
-  // 团队分析：管理员 + 审计员
+  // 第三层：看全员数据的页面（团队分析、审计日志、日报月报查阅），管理员 + 审计员
   if (to.meta.viewAll && !['admin', 'auditor'].includes(role)) return { path: '/dashboard' }
-  // 审计员为只读账号，写操作页面一律回到团队分析
+  // 第四层：审计员为只读账号，写操作页面一律回到团队分析（有权限看的那一页）
   if (to.meta.write && role === 'auditor') return { path: '/analytics' }
   return true
 })

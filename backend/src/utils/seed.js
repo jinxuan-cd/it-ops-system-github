@@ -1,7 +1,27 @@
+/**
+ * @file backend/src/utils/seed.js
+ * @description 建表补列、历史数据修复、基础字典与默认账号种子、系统设置兜底
+ *
+ * 初始化与数据迁移 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const bcrypt = require('bcryptjs')
 const { query } = require('../db')
 
 // 一次性迁移登记表：记录已执行过的数据修复，避免每次启动重复执行
+/**
+ * 建迁移标记表（IF NOT EXISTS，本身也是幂等的）。
+ * 所有「不能重复执行」的数据修复都靠这张表打标记，
+ * 因为 UPDATE 类修复没有 CREATE IF NOT EXISTS 那样的天然幂等性。
+ *
+ * @returns {Promise<void>}
+ * @sideeffect 首次启动时创建 sys_meta 表
+ */
 async function ensureMetaTable() {
   await query(`CREATE TABLE IF NOT EXISTS sys_meta (
     meta_key   VARCHAR(64) NOT NULL,
@@ -11,15 +31,37 @@ async function ensureMetaTable() {
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统元信息（一次性迁移标记）'`)
 }
 
+/**
+ * 判断某个一次性迁移是否已执行过。
+ *
+ * @param {string} key 迁移标识，约定为 'migr_日期_用途'
+ * @returns {Promise<boolean>}
+ */
 async function metaDone(key) {
   const rows = await query('SELECT meta_key FROM sys_meta WHERE meta_key = ?', [key])
   return rows.length > 0
 }
 
+/**
+ * 登记迁移已完成。必须在修复动作之后调用，
+ * 先登记后执行的话一旦中途失败，下次启动会误判为「已做过」而永久跳过。
+ *
+ * @param {string} key 迁移标识
+ * @param {string} [value='1'] 附加信息（如影响行数）
+ * @returns {Promise<void>}
+ */
 async function markMeta(key, value = '1') {
   await query('INSERT INTO sys_meta (meta_key, meta_value) VALUES (?, ?)', [key, value])
 }
 
+/**
+ * 判断表是否存在。
+ * 补列/改数据前必须先查，因为老库可能整体缺某个后来才引入的表，
+ * 直接 ALTER 会抛错并中断整个启动迁移。
+ *
+ * @param {string} name 表名
+ * @returns {Promise<boolean>}
+ */
 async function tableExists(name) {
   const rows = await query(
     'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [name]
@@ -31,6 +73,17 @@ async function tableExists(name) {
 //  1) 早期数据库容器跑在 UTC，DEFAULT CURRENT_TIMESTAMP 存的是 UTC 墙钟时间，与本地差 8 小时，统一回填 +8
 //  2) 导入的历史工单存在「完成时间早于发生时间」的脏数据，会让趋势图出现「受理 4 / 完成 0」的假象
 //  3) 状态为已完成但缺少完成时间的工单，补成发生时间
+/**
+ * 历史数据修复（一次性，各段独立打标记）。
+ *
+ * 每段都是「先查 sys_meta → 修复 → 登记」的三步式，因此：
+ * · 已执行过的库不会重复 +8 小时（重复加会把时间推到未来，比不修更糟）；
+ * · 某段失败不影响其他段，下次启动只补没做过的那段；
+ * · 只修历史脏数据，不做任何结构变更。
+ *
+ * @returns {Promise<void>}
+ * @sideeffect 直接改业务表数据；会打印修正行数便于事后核对
+ */
 async function repairLegacyData() {
   if (!(await metaDone('migr_20261028_tz_repair'))) {
     const tables = ['ticket', 'knowledge', 'sys_user', 'todo', 'month_goal', 'project', 'monthly_report', 'daily_report', 'user_ai_config']
@@ -65,6 +118,19 @@ async function repairLegacyData() {
 }
 
 // 新增模块所需表结构（全部 IF NOT EXISTS，可反复执行）
+/**
+ * 业务模块的表结构与补列（故障、巡检、账号台账、审计、通知、SLA、系统设置）。
+ *
+ * 三类操作各自靠不同机制保证幂等，重复启动不会出错，也不会覆盖数据：
+ * 1) 建表：CREATE TABLE IF NOT EXISTS，表已存在则整条跳过；
+ * 2) 补列：先查 information_schema.COLUMNS，缺列才 ALTER（MySQL 不支持 ADD COLUMN IF NOT EXISTS）；
+ * 3) 种子数据：只在「一条都没有」时插入默认值——SLA 默认策略按 COUNT(*)=0 判断，
+ *    service_desk_enable 按 key 是否存在判断。已有数据一律不动，
+ *    否则管理员调过的策略、改过的开关会在每次重启后被重置回默认值。
+ *
+ * @returns {Promise<void>}
+ * @sideeffect 建表/补列；写入默认 SLA 策略与系统设置；为历史工单回填 SLA；首次把完整知识条目标记为公开
+ */
 async function migrateModules() {
   // 1) SLA 时效策略：按「问题类别 + 优先级」定义响应/解决时限，'*' 为默认兜底
   await query(`CREATE TABLE IF NOT EXISTS sla_policy (
@@ -263,11 +329,25 @@ async function migrateModules() {
   }
 }
 
+/**
+ * 读取系统设置项。
+ *
+ * @param {string} k 设置键
+ * @returns {Promise<string|null>} 值；键不存在返回 null（调用方据此判断「未初始化」并补默认值）
+ */
 async function settingGet(k) {
   const rows = await query('SELECT v FROM sys_setting WHERE k = ?', [k])
   return rows.length ? rows[0].v : null
 }
 
+/**
+ * 写入系统设置（存在则覆盖）。
+ * 用 ON DUPLICATE KEY UPDATE 而不是先查后写：两个请求同时初始化同一个 key 时不会主键冲突。
+ *
+ * @param {string} k 设置键
+ * @param {string} v 值（统一存字符串，布尔用 '0'/'1'）
+ * @returns {Promise<void>}
+ */
 async function settingSet(k, v) {
   await query(
     'INSERT INTO sys_setting (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = ?',
@@ -281,6 +361,16 @@ async function settingSet(k, v) {
 // 表现就是：设置页入口密钥为空 → 二维码一直是「生成中」→ 员工扫码报障打不开，
 // 报障接口还会因为 enable !== '1' 直接拒绝。
 // 这里在读接口按需补齐，保证任何部署形态都能自愈，且不依赖启动顺序。
+/**
+ * 读取并兜底补齐自助门户所需的设置项。
+ *
+ * @returns {Promise<{key:string, report_enable:boolean, faq_enable:boolean, duty_contacts:Array<{name:string,phone:string,note:string}>}>}
+ * @sideeffect 缺 report_key 时生成 18 位十六进制密钥并落库（只生成一次，二维码依赖它，变更会导致已发二维码失效）；
+ *             缺开关时补 '1'；已存在的值原样沿用，不覆盖管理员的选择
+ *
+ * 只在「键不存在」时补默认值，判断用 undefined/null 而不是假值——
+ * 管理员有意关成 '0' 时必须保持关闭，不能被默认值顶回开启。
+ */
 async function ensurePublicSettings() {
   const rows = await query(
     "SELECT k, v FROM sys_setting WHERE k IN ('report_key','report_enable','faq_enable','duty_contacts')"
@@ -318,6 +408,22 @@ async function ensurePublicSettings() {
 }
 
 // 轻量迁移：为已有数据库补齐新增字段/新表（幂等，可重复执行）
+/**
+ * 启动时执行的轻量迁移总入口，每次启动都会跑一遍，必须整体幂等。
+ *
+ * 执行顺序有依赖：先建 sys_meta（后面的一次性修复要打标记）→ 补列 → 建表 → 数据修复 → 业务模块迁移。
+ *
+ * 三类操作的触发条件各不相同：
+ * · 补列：information_schema 里查不到该列才 ALTER，已存在直接跳过；
+ * · 建表：CREATE TABLE IF NOT EXISTS，表存在则整条语句无副作用；
+ * · 数据修复：由 sys_meta 标记控制，全局只执行一次。
+ *
+ * 之所以「只补不覆盖」：升级场景下库里已经是用户在用的真实数据，
+ * 迁移只允许往结构上补齐、往空值上填默认，任何覆盖都会造成数据丢失且不可回滚。
+ *
+ * @returns {Promise<void>}
+ * @sideeffect 建表/补列/修复历史数据，均为可重复执行的写操作
+ */
 async function migrateSchema() {
   await ensureMetaTable()
   const checks = [
@@ -400,6 +506,16 @@ async function migrateSchema() {
 
 // 后端启动时自动创建默认管理员（仅当用户表为空时执行）
 // 生产环境建议通过 DEFAULT_ADMIN_PASSWORD 环境变量指定初始口令
+/**
+ * 初始化默认管理员。
+ *
+ * 触发条件：sys_user 表为空。只要已有任何一个账号就整体跳过——
+ * 否则管理员删掉 admin 改名自用后，重启会凭空多出一个默认口令账号，
+ * 等于给系统留了后门。二次创建时请走「账号管理」页面。
+ *
+ * @returns {Promise<void>}
+ * @sideeffect 写入一条 admin 记录（口令 bcrypt 加盐哈希，不存明文）
+ */
 async function seedDefaultUsers() {
   const users = await query('SELECT COUNT(*) AS cnt FROM sys_user')
   if (users[0].cnt > 0) return
@@ -414,4 +530,6 @@ async function seedDefaultUsers() {
   console.log('[seed] 已创建默认管理员账号 admin，请登录后立即修改密码')
 }
 
+// 导出即本模块的对外契约：index.js 只用 seedDefaultUsers / migrateSchema，
+// 其余路由通过 settingGet / settingSet / ensurePublicSettings 读写系统设置
 module.exports = { seedDefaultUsers, migrateSchema, settingGet, settingSet, ensurePublicSettings }

@@ -1,3 +1,13 @@
+<!--
+  巡检管理 —— IT 运维工单台账与日报自动管理系统
+  巡检项配置、执行上报与异常转工单
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page insp-page">
     <div class="it-between page-head">
@@ -6,6 +16,7 @@
         <div class="page-sub">巡检逐项打卡，支持现场拍照留底；异常项可一键转工单</div>
       </div>
       <div class="head-actions">
+        <!-- 今日是否已巡检：一天一条是业务口径，顶部直接给结论，减少重复提交 -->
         <el-tag v-if="todayDone" type="success" size="large" effect="plain">今日已巡检</el-tag>
         <el-tag v-else type="warning" size="large" effect="plain">今日未巡检</el-tag>
         <el-button v-if="canWrite" type="primary" :size="isMobile ? 'default' : 'small'" @click="openCreate">
@@ -14,6 +25,7 @@
       </div>
     </div>
 
+    <!-- 筛选：时间按巡检日期取区间，结果按整单结论，关键词匹配区域与备注 -->
     <div class="it-card filter-card" style="margin-bottom:14px">
       <el-form :inline="!isMobile" :model="filters" size="small">
         <el-form-item label="时间">
@@ -37,6 +49,7 @@
     </div>
 
     <!-- 移动端：卡片列表 -->
+    <!-- 卡片只留结论与进度，详情/转工单/删除收进底部操作区，避免误触 -->
     <div v-if="isMobile" class="it-card m-list" v-loading="loading">
       <div v-for="row in rows" :key="row.inspection_id" class="m-item" @click="openDetail(row)">
         <div class="m-head">
@@ -66,6 +79,7 @@
     </div>
 
     <!-- 桌面端：表格 -->
+    <!-- 桌面端表格：异常项与拍照张数直接展开，减少进详情的次数 -->
     <div v-else class="it-card">
       <el-table :data="rows" stripe border v-loading="loading" :max-height="560" empty-text="暂无巡检记录">
         <el-table-column prop="insp_date" label="巡检日期" width="120" />
@@ -112,6 +126,7 @@
     </div>
 
     <!-- 巡检表单 -->
+    <!-- 检查项来自模板但可临时增删；未勾选即异常，需拍照项缺图会二次确认 -->
     <el-dialog v-model="formVisible" title="机房巡检" :width="isMobile ? '94vw' : '660px'" :fullscreen="isMobile" top="5vh">
       <el-form label-width="82px" :label-position="isMobile ? 'top' : 'right'">
         <el-row :gutter="12">
@@ -173,6 +188,7 @@
     </el-dialog>
 
     <!-- 详情 -->
+    <!-- 只读展示：逐项列出正常/异常、补充说明与现场照片，异常项标红叉 -->
     <el-dialog v-model="detailVisible" title="巡检详情" :width="isMobile ? '94vw' : '560px'" :fullscreen="isMobile">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
@@ -210,29 +226,41 @@ import R from '../api'
 import { useUserStore } from '../store/user'
 
 const userStore = useUserStore()
+// 审计员只读：新增、删除、转工单三个入口统一由它控制显隐
 const canWrite = computed(() => !userStore.isAuditor)
 
+// 列表数据与 loading 分离，刷新时先留住旧数据，避免表格闪空
 const rows = ref([])
 const loading = ref(false)
+// 时间区间与结果/关键词筛选，最终由 params() 组装成查询参数
 const range = ref([])
 const filters = reactive({ result: '', keyword: '' })
+// 今天是否已有巡检记录，决定顶部显示「今日已巡检」还是「今日未巡检」
 const todayDone = ref(false)
 
+// 巡检模板：区域候选 + 检查项定义，来自「巡检设置」，没配时用后端默认项
 const config = reactive({ areas: [], items: [] })
 
+// 巡检表单的显隐与提交中状态
 const formVisible = ref(false)
 const saving = ref(false)
+// 一次巡检的临时表单；items 每项含 done/note/photos，提交时整体序列化
 const form = reactive({ insp_date: '', area: '', items: [], remark: '' })
+// 未勾选即计为异常：实时提示整单结论，避免提交完才发现漏项
 const abnormalCount = computed(() => (form.items || []).filter(x => !x.done).length)
+// 正在上传的巡检项引用，只在那一个缩略块显示转圈，不锁住整个弹窗
 const uploading = ref(null)
 
+// 详情弹窗的数据与显隐
 const detailVisible = ref(false)
 const detail = ref(null)
 
 // 窄屏用卡片列表（巡检主要在手机上做）
+// 断点与其它页面保持一致（820px），保证同一入口在手机上的呈现统一
 const isMobile = ref(window.innerWidth <= 820)
 function onResize() { isMobile.value = window.innerWidth <= 820 }
 
+// 组装查询参数：能看全员的人才带 all=1，普通账号由后端收口只看本人
 function params() {
   const p = {}
   if (userStore.canViewAll) p.all = 1
@@ -242,10 +270,12 @@ function params() {
   return p
 }
 
+// 汇总一张巡检单下所有检查项的照片总数，列表里只显示这个数
 function photoCount(row) {
   return (row.items || []).reduce((n, it) => n + ((it.photos && it.photos.length) || 0), 0)
 }
 
+// 先取模板再开表单：区域与检查项都依赖它，取不到就退化成内置默认项
 async function loadConfig() {
   try {
     const c = await R.getInspectionConfig()
@@ -254,6 +284,7 @@ async function loadConfig() {
   } catch { /* 用后端默认值兜底 */ }
 }
 
+// 列表与「今日是否已巡检」一起刷新，保证顶部状态和下方记录不打架
 async function load() {
   loading.value = true
   try {
@@ -263,6 +294,7 @@ async function load() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 清空筛选条件后立刻重查，不停留在上一次的筛选结果上
 function resetFilters() {
   range.value = []
   filters.result = ''
@@ -270,11 +302,13 @@ function resetFilters() {
   load()
 }
 
+// 本地时区拼 YYYY-MM-DD；用 toISOString 会因 UTC 偏移差一天
 function today() {
   const d = new Date(), p = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// 默认日期取今天、区域取模板第一项，检查项统一重置为未勾选
 function openCreate() {
   form.insp_date = today()
   form.area = config.areas[0] || '机房'
@@ -284,11 +318,13 @@ function openCreate() {
     .map(x => ({ name: x.name, need_photo: !!x.need_photo, done: false, note: '', photos: [] }))
   formVisible.value = true
 }
+// 现场发现模板外的项目时临时补一条，只对本次巡检有效，不回写模板
 function addItem() {
   form.items.push({ name: '新增检查项', need_photo: false, done: false, note: '', photos: [] })
 }
 
 // ===== 拍照：手机点「拍照」直接调起相机（input capture），桌面端选文件 =====
+// 桌面端浏览器不认 capture，会退化成选文件，后续上传流程完全一致
 function pickPhoto(item) {
   const input = document.createElement('input')
   input.type = 'file'
@@ -305,6 +341,7 @@ function pickPhoto(item) {
 }
 
 // 压缩到 1600px / JPEG，手机原图 5MB 压到 200KB 左右，弱网也能传
+// 小于 300KB 的图直接放行，不做无谓的重编码
 function compress(file, max = 1600, quality = 0.82) {
   return new Promise(resolve => {
     if (!/^image\//.test(file.type) || file.size < 300 * 1024) return resolve(file)
@@ -326,6 +363,7 @@ function compress(file, max = 1600, quality = 0.82) {
   })
 }
 
+// 压缩后上传，成功后只取第一张 url 塞进该项；失败只提示，不中断其它项的填写
 async function uploadPhoto(item, file) {
   uploading.value = item
   try {
@@ -340,6 +378,7 @@ async function uploadPhoto(item, file) {
   } finally { uploading.value = null }
 }
 
+// 需拍照项缺图只提示不硬拦：现场可能拍不了，允许人工确认后带缺口提交
 async function onSave() {
   const missing = form.items.filter(x => x.need_photo && !x.photos.length)
   if (missing.length) {
@@ -351,6 +390,7 @@ async function onSave() {
   }
   saving.value = true
   try {
+    // 只提交 /uploads/ 下的地址：过滤掉本地 blob 预览地址，避免后端存下无效路径
     const payload = {
       insp_date: form.insp_date,
       area: form.area,
@@ -367,6 +407,7 @@ async function onSave() {
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
 }
 
+// 异常巡检一键转工单：后端按异常项拼出工单内容并回写 ticket_id，转过后按钮自动消失
 async function toTicket(row) {
   try {
     await ElMessageBox.confirm('把异常巡检项生成一条工单？', '转工单', { type: 'info' })
@@ -378,6 +419,7 @@ async function toTicket(row) {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 物理删除：二次确认通过后才调接口，成功后刷新列表
 async function onDelete(row) {
   try {
     await ElMessageBox.confirm('确认删除该巡检记录？', '提示', { type: 'warning' })
@@ -389,16 +431,19 @@ async function onDelete(row) {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 详情直接用列表行数据：列表已返回完整 items 与照片，不必再请求一次
 function openDetail(row) {
   detail.value = row
   detailVisible.value = true
 }
 
+// 先拿模板再拉列表：开表单时要立刻有区域与检查项可选
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   await loadConfig()
   load()
 })
+// resize 监听必须在卸载时摘掉，否则来回切页面会重复绑定
 onUnmounted(() => window.removeEventListener('resize', onResize))
 </script>
 

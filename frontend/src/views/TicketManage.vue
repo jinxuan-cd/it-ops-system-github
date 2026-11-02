@@ -1,8 +1,19 @@
+<!--
+  工单管理 —— IT 运维工单台账与日报自动管理系统
+  工单列表检索、抢单派单、完成、批量操作与导出
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page ticket-page">
     <h3 class="it-section-title">工单记录管理</h3>
 
-    <!-- 筛选 -->
+    <!-- 筛选
+         范围三档：mine=只看指派给自己的；all=全员（仅管理员/能看全部的人可见）；pool=待接单池 -->
     <div class="it-card" style="margin-bottom:14px">
       <el-form :inline="true" :model="filters" size="small">
         <el-form-item label="范围">
@@ -53,6 +64,7 @@
         <el-form-item>
           <el-input v-model="filters.keyword" placeholder="联系人/内容搜索" clearable style="width:150px" />
         </el-form-item>
+        <!-- 关键词需要点「查询」才生效（避免每敲一个字就请求一次）；导出走当前筛选条件 -->
         <el-form-item>
           <el-button type="primary" @click="search"><el-icon><Search /></el-icon> 查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
@@ -67,7 +79,9 @@
 
     <!-- 列表 -->
     <div ref="cardRef" class="it-card ticket-table-card">
-      <!-- 批量操作条（与表格同卡片，省出一屏高度） -->
+      <!-- 批量操作条（与表格同卡片，省出一屏高度）
+           批量改状态/删除受 canWrite 限制（审计员只读），导出不限；
+           选中项跨页保留（表格 reserve-selection），但改筛选条件后会被清空 -->
       <div class="batch-bar">
         <div class="batch-left">
           <span class="batch-count">已选 <b>{{ selected.length }}</b> 条</span>
@@ -108,6 +122,7 @@
             <span v-if="row.assignee_name" class="m-assignee">负责人 {{ row.assignee_name }}</span>
           </div>
           <div class="m-ops">
+            <!-- 只在 pending 时给「接取」；已指派的单子按钮变成「转单」，走同一个派单弹窗 -->
             <el-button size="small" text type="primary" @click="openDetail(row)">详情</el-button>
             <el-button v-if="canWrite && row.status === 'pending'" size="small" text type="success" @click="onClaim(row)">接取</el-button>
             <el-button v-if="canWrite" size="small" text type="primary" @click="openAssign(row)">{{ row.assignee_id ? '转单' : '派单' }}</el-button>
@@ -215,6 +230,8 @@
       <template #footer>
         <div class="detail-foot">
           <div class="df-left">
+            <!-- 接取：仅「待接单且未指派且本账号能抢单」；派单/转单：未完成时（已指派的按钮文案变转单）；
+                 退回池子：已指派、未完成（派单权限或本人负责的单子） -->
             <el-button v-if="detailCanClaim" type="success" :loading="claiming" @click="onClaim(detail)">接取这张工单</el-button>
             <el-button v-if="canWrite && detail && detail.status !== 'done'" @click="openAssign(detail)">
               {{ detail.assignee_id ? '转单' : '派单' }}
@@ -235,6 +252,8 @@
         <el-form-item label="应用系统"><el-select v-model="editForm.app_system" filterable style="width:100%"><el-option v-for="d in dicts.app_system" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" /></el-select></el-form-item>
         <el-form-item label="问题类别"><el-select v-model="editForm.problem_type" filterable style="width:100%"><el-option v-for="d in dicts.problem_type" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" /></el-select></el-form-item>
         <el-form-item label="服务内容"><el-input v-model="editForm.service_content" type="textarea" :rows="2" /></el-form-item>
+        <!-- 完成时间与状态双向联动：
+             选「已完成」自动补当前时间；清空完成时间则状态回落为处理中（见 onEditStatusChange / onEditFinishChange） -->
         <el-form-item label="完成时间">
           <el-date-picker v-model="editForm.finish_time" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" @change="onEditFinishChange" />
         </el-form-item>
@@ -246,6 +265,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="状态">
+          <!-- 这里只放开处理中/已完成：把单子改回待接单走详情里的「退回待接单池」，避免绕过通知逻辑 -->
           <el-radio-group v-model="editForm.status" @change="onEditStatusChange">
             <el-radio value="processing">处理中</el-radio><el-radio value="done">已完成</el-radio>
           </el-radio-group>
@@ -257,7 +277,8 @@
         <el-button type="primary" :loading="saving" @click="onSaveEdit">保存</el-button>
       </template>
     </el-dialog>
-    <!-- 派单 / 转单 -->
+    <!-- 派单 / 转单
+         同一个弹窗：工单原本没负责人叫「派单」，已有负责人叫「转单」；派单后待接单直接转处理中 -->
     <el-dialog v-model="assignVisible" :title="assignForm.isTransfer ? '转单给其他工程师' : '派单给工程师'" width="440px">
       <el-form label-width="80px">
         <el-form-item label="工单">
@@ -291,8 +312,10 @@ import { workflow, loadWorkflow } from '../utils/workflow'
 const userStore = useUserStore()
 const route = useRoute()
 const router = useRouter()
+// 列表数据与加载态：数据始终来自后端分页，前端不做二次切片
 const rows = ref([])
 const loading = ref(false)
+// 部门 / 应用系统 / 问题类别三本基础字典，筛选项和编辑弹窗共用
 const dicts = reactive({ dept: [], app_system: [], problem_type: [] })
 const filters = reactive({ scope: 'mine', range: [], dept: '', app_system: '', problem_type: '', status: '', priority: '', sla: '', keyword: '' })
 // 高级筛选项默认收起，给列表留出高度
@@ -314,6 +337,7 @@ function stMeta(s) {
 const canWrite = computed(() => !userStore.isAuditor)
 
 const tableRef = ref(null)
+// selected 与表格勾选保持同步（移动端卡片列表则手动 pick），批量操作都以它为准
 const selected = ref([])
 // 服务端分页：默认每页 20 条，翻页/改每页条数才重新请求，不再一次性拉全量
 const pager = reactive({ page: 1, size: window.innerWidth <= 820 ? 10 : 20, total: 0 })
@@ -321,6 +345,7 @@ const pager = reactive({ page: 1, size: window.innerWidth <= 820 ? 10 : 20, tota
 const cardRef = ref(null)
 const tableH = ref(420)
 let ro = null
+// 按容器实际高度算出表格高度：固定高度会导致页面出现两条滚动条
 function measure() {
   if (!cardRef.value) return
   const h = cardRef.value.clientHeight
@@ -338,10 +363,12 @@ function onResize() { isMobile.value = window.innerWidth <= 820; measure() }
 
 function onSelectionChange(list) { selected.value = list }
 function isPicked(row) { return selected.value.some(r => r.ticket_id === row.ticket_id) }
+// 移动端没有 el-table 的 selection 列，自己维护勾选；用新数组赋值而不是 push，保证响应式更新
 function pick(row, on) {
   if (on) { if (!isPicked(row)) selected.value = [...selected.value, row] }
   else selected.value = selected.value.filter(r => r.ticket_id !== row.ticket_id)
 }
+// 「全选本页」只选当前页，不跨页累加：跨页全选在服务端分页下容易误删
 function selectAll() {
   if (isMobile.value) { selected.value = rows.value.slice(); return }
   if (tableRef.value) rows.value.forEach(r => tableRef.value.toggleRowSelection(r, true))
@@ -379,6 +406,7 @@ const editVisible = ref(false)
 const saving = ref(false)
 const editForm = reactive({})
 
+// 字典失败不影响列表展示（筛选项为空而已），所以静默吞掉异常
 async function loadDicts() {
   try {
     const data = await R.getDicts(false)
@@ -386,6 +414,7 @@ async function loadDicts() {
   } catch (e) { /* 字典失败不影响列表展示 */ }
 }
 
+// 主列表加载：查询条件 + 分页参数一起给后端，响应里的 total 才是筛选后的总数
 async function load() {
   loading.value = true
   try {
@@ -409,6 +438,7 @@ function search() { pager.page = 1; load() }
 function onSizeChange(n) { pager.size = n; pager.page = 1; load() }
 function onPageChange(p) { pager.page = p; load() }
 
+// 重置只清筛选项，保留当前范围（「全部员工 / 待接单池」是用户主动选的视角）
 function resetFilters() {
   Object.assign(filters, { range: [], dept: '', app_system: '', problem_type: '', status: '', priority: '', sla: '', keyword: '' })
   search()
@@ -428,6 +458,7 @@ function today() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// 导出 Excel：后端按当前筛选条件（不分页）生成 xlsx，前端只负责把 blob 存成文件
 async function onExport() {
   try {
     const blob = await R.exportTicketsBlob(baseParams())
@@ -447,6 +478,8 @@ async function onBatchExport() {
   } catch (e) { ElMessage.error('导出失败：' + e.message) }
 }
 
+// 批量删除：点「取消」时 confirm 会 reject，先接住再返回，
+// 否则控制台会冒出未捕获的 Promise 异常，也不该继续发删除请求
 async function onBatchDelete() {
   const ids = selected.value.map(r => r.ticket_id)
   if (!ids.length) return
@@ -464,6 +497,7 @@ async function onBatchDelete() {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 批量标记完成：提示语优先用后端返回的 updated（实际生效条数），拿不到才退回勾选数
 async function onBatchComplete() {
   const ids = selected.value.map(r => r.ticket_id)
   if (!ids.length) return
@@ -482,7 +516,8 @@ const PRI = { urgent: '紧急', high: '高', normal: '普通', low: '低' }
 function priLabel(p) { return PRI[p] || '普通' }
 function priType(p) { return p === 'urgent' ? 'danger' : p === 'high' ? 'warning' : p === 'low' ? 'info' : 'primary' }
 
-// SLA 时效
+// SLA 时效：state=overdue 的判断放在「已完成」之前，
+// 所以超时后才完成的单子仍显示红色「已超时」，不会被成功色盖掉
 function slaType(row) {
   if (row.state === 'overdue') return 'danger'
   if (row.status === 'done') return 'success'
@@ -495,6 +530,8 @@ function slaText(row) {
   if (row.remain_hours != null && row.remain_hours <= 4) return '即将超时'
   return '进行中'
 }
+// 悬浮提示里补上应响应/应解决的时间点与剩余小时，
+// 光看「即将超时」不知道还差多久，值班时需要具体时间
 function slaTip(row) {
   const parts = []
   if (row.sla_respond_due) parts.push(`应响应：${String(row.sla_respond_due).slice(5, 16)}`)
@@ -504,15 +541,18 @@ function slaTip(row) {
 }
 
 // 派单 / 转单
+// staff 是可选工程师列表，只在第一次打开弹窗时拉一次（列表变动极少）
 const assignVisible = ref(false)
 const assigning = ref(false)
 const staff = ref([])
+// isTransfer 只影响弹窗标题与按钮文案，接口是同一个
 const assignForm = reactive({ ticket_id: null, content: '', assignee_id: null, isTransfer: false })
 
 async function loadStaff() {
   if (staff.value.length) return
   try { staff.value = await R.listStaff() } catch { /* ignore */ }
 }
+// 打开派单弹窗：已有负责人视为转单；同时把详情弹窗关掉，避免两层弹窗叠在一起
 function openAssign(row) {
   if (!row) return
   assignForm.ticket_id = row.ticket_id
@@ -523,6 +563,8 @@ function openAssign(row) {
   assignVisible.value = true
   loadStaff()
 }
+// 派单成功后广播 todo-changed，让右下角待办面板与被派单同事的待办立即刷新；
+// 本地列表与待接单池计数也一起重拉
 async function onAssign() {
   if (!assignForm.assignee_id) return ElMessage.warning('请选择要指派的工程师')
   assigning.value = true
@@ -570,6 +612,7 @@ async function onRelease(row) {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 待接单数量角标：只有能抢单的角色才请求，服务台/审计员没必要多打一次接口
 async function loadPoolCount() {
   if (!userStore.canClaim) return
   try {
@@ -578,6 +621,7 @@ async function loadPoolCount() {
   } catch (e) { /* 静默 */ }
 }
 
+// 列表行直接复用做详情展示；由 URL 跳进来的才走 openDetailById 拉完整数据
 function openDetail(row) {
   detail.value = row
   detailVisible.value = true
@@ -594,9 +638,11 @@ async function openDetailById(id) {
     return null
   }
 }
+// 详情里「接取」的显示条件：还在池子里（pending 且无负责人）且当前账号有抢单权限
 const detailCanClaim = computed(() =>
   !!detail.value && detail.value.status === 'pending' && !detail.value.assignee_id && userStore.canClaim
 )
+// 退回池子：已完成的不能再退；有派单权限、或本人是负责人/提单人才能操作
 const detailCanRelease = computed(() => {
   const d = detail.value
   if (!d || d.status === 'done' || d.status === 'pending') return false
@@ -604,6 +650,7 @@ const detailCanRelease = computed(() => {
     Number(d.assignee_id) === Number(userStore.userId) ||
     Number(d.user_id) === Number(userStore.userId)
 })
+// 深拷贝一份再编辑：直接引用行对象会让「取消」也把改动写回列表
 function openEdit(row) {
   Object.assign(editForm, JSON.parse(JSON.stringify(row)))
   editVisible.value = true
@@ -621,6 +668,8 @@ function onEditFinishChange(v) {
   if (!v && editForm.status === 'done') editForm.status = 'processing'
 }
 
+// 编辑保存：只提交这 10 个可编辑字段，负责人/响应时间等状态字段由抢单派单接口维护，
+// 避免编辑弹窗把并发操作的结果覆盖回去
 async function onSaveEdit() {
   saving.value = true
   try {

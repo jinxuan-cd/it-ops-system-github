@@ -1,3 +1,13 @@
+<!--
+  账号台账 —— IT 运维工单台账与日报自动管理系统
+  客户与系统账号登记、密码保管与到期提醒
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -11,6 +21,7 @@
     </div>
 
     <el-row v-if="summary.length" :gutter="14" class="card-row">
+      <!-- 汇总只取前 4 个系统：卡片是概览用途，系统多了会挤成两行，明细看下方表格 -->
       <el-col v-for="s in summary.slice(0, 4)" :key="s.name" :xs="12" :sm="6">
         <div class="sum-card">
           <div class="s-name">{{ s.name }}</div>
@@ -58,6 +69,7 @@
         <el-table-column prop="dept" label="部门" width="110" />
         <el-table-column prop="permission_desc" label="权限说明" min-width="180" show-overflow-tooltip />
         <el-table-column label="动作" width="90">
+          <!-- 注销用灰色、变更用黄色、开通用绿色：tag 颜色按动作直接定，不走状态字段 -->
           <template #default="{ row }">
             <el-tag size="small" :type="row.action === '注销' ? 'info' : row.action === '变更' ? 'warning' : 'success'">{{ row.action }}</el-tag>
           </template>
@@ -70,6 +82,7 @@
           </template>
         </el-table-column>
         <el-table-column label="操作" width="130" fixed="right">
+          <!-- 审计员只读：台账里有账号与权限说明，不给写入口，避免审计角色顺手改台账 -->
           <template #default="{ row }">
             <template v-if="canWrite">
               <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
@@ -150,18 +163,24 @@ import R from '../api'
 import { useUserStore } from '../store/user'
 
 const userStore = useUserStore()
+// 审计员只读：台账涉及账号与权限，不开放写入
 const canWrite = computed(() => !userStore.isAuditor)
 
 const rows = ref([])
+// 按系统聚合的「在用 / 总数」，给顶部卡片用；与列表共用同一组筛选条件
 const summary = ref([])
 const loading = ref(false)
+// 下拉字典（应用系统、部门）：只读基础数据，取不到也不影响表格
 const dicts = reactive({ app_system: [], dept: [] })
 const filters = reactive({ system_name: '', action: '', status: '', keyword: '' })
 
+// 新增/编辑共用同一个表单对象，用 account_id 有无区分模式
 const formVisible = ref(false)
 const saving = ref(false)
 const form = reactive({})
 
+// 组装查询参数：空字符串不下发（后端按「没有该条件」处理，不要传空串当筛选值）；
+// all=1 只给能看全公司的角色，普通用户不传，由后端限定本人范围
 function params() {
   const p = {}
   if (userStore.canViewAll) p.all = 1
@@ -169,6 +188,8 @@ function params() {
   return p
 }
 
+// 列表与汇总用同一组参数串行请求：汇总卡片的数字必须和表格是同一次筛选的结果，
+// 否则会出现「卡片显示 8 个在用、表格只列出 3 条」的对不上
 async function load() {
   loading.value = true
   try {
@@ -182,6 +203,8 @@ function resetFilters() {
   load()
 }
 
+// 清空后再赋默认值：不先清空的话，上一条记录的 account_id 会残留，
+// 点「登记账号」保存时会走进更新分支，把别人的记录改掉
 function openCreate() {
   Object.keys(form).forEach(k => delete form[k])
   const d = new Date(); const p = n => String(n).padStart(2, '0')
@@ -190,11 +213,13 @@ function openCreate() {
   form.operate_date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
   formVisible.value = true
 }
+// 同样先清空再整体覆盖：直接 assign 会把上次新增留下的默认动作/状态带进来
 function openEdit(row) {
   Object.keys(form).forEach(k => delete form[k])
   Object.assign(form, row)
   formVisible.value = true
 }
+// 有 account_id 走更新，没有走新增；成功后关窗并重新取数（汇总卡片也要跟着变）
 async function onSave() {
   saving.value = true
   try {
@@ -205,6 +230,7 @@ async function onSave() {
     load()
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
 }
+// 二次确认再删：ElMessageBox.confirm 取消时会 reject，catch 后直接返回，不弹错误提示
 async function onDelete(row) {
   try {
     await ElMessageBox.confirm('确认删除该台账记录？', '提示', { type: 'warning' })
@@ -216,6 +242,7 @@ async function onDelete(row) {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 先取字典再取列表：字典失败只影响下拉可选项，台账本身照常展示
 onMounted(async () => {
   try {
     const d = await R.getDicts(false)

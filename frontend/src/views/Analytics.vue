@@ -1,3 +1,13 @@
+<!--
+  团队运营分析 —— IT 运维工单台账与日报自动管理系统
+  总览指标、人员维度分析、超期未完成工单滚动列表
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -18,6 +28,8 @@
     </div>
 
     <!-- 数据体检提示：只在发现异常时出现，可一键修复 -->
+    <!-- 完成时间早于发生时间、已完成却缺完成时间、发生时间在未来这几类脏数据，
+         会直接污染平均时长与月度趋势，先把问题暴露出来再谈指标 -->
     <el-alert v-if="health.issues > 0" type="warning" :closable="false" show-icon class="health-bar">
       <template #title>
         数据体检发现 {{ health.issues }} 条异常工单会影响统计口径：
@@ -29,6 +41,8 @@
     </el-alert>
 
     <!-- 核心指标 -->
+    <!-- 受理量按发生时间、完成量按完成时间统计，两个口径的时点不同：
+         一张单可能本月报下月完成，所以完成率与「完成/受理」不是严格的守恒关系 -->
     <el-row :gutter="14" class="card-row">
       <el-col :xs="12" :sm="8" :md="4">
         <div class="metric-card blue">
@@ -54,6 +68,8 @@
           <div class="m-label">平均处理时长 · {{ m.avg_hours === null ? '本期无起止时间完整的工单' : '较' + (data.prev_label || '上期') + ' ' + hoursDiffText }}</div>
         </div>
       </el-col>
+      <!-- 积压 / 超 24h 是「当前时点」快照，不随顶部时间维度变化：
+           切到「本月」看的是本月受理量，而积压永远是此刻还没闭环的单 -->
       <el-col :xs="12" :sm="8" :md="4">
         <div class="metric-card" :class="m.over24 > 0 ? 'red pulse' : 'teal'">
           <div class="m-val">{{ m.backlog }}<small v-if="m.over24 > 0"> / 超24h {{ m.over24 }}</small></div>
@@ -136,12 +152,16 @@
       <el-col :md="15">
         <div class="it-card">
           <h4 class="it-section-title">受理 / 完成趋势</h4>
+          <!-- 受理用柱、完成用折线：一个是流量、一个是产出，同轴不同图形更容易分辨。
+               X 轴标签按 key 长度区分粒度：两位数是小时、10 位以上是日期，只保留月-日 -->
           <div ref="trendEl" class="chart"></div>
         </div>
       </el-col>
       <el-col :md="9">
         <div class="it-card">
           <h4 class="it-section-title">人员产出排名（{{ data.range_label || '本月' }}完成量）</h4>
+          <!-- 只取完成量 > 0 的前 10 名，0 单的人不占格子；数据先 reverse 再交给类目轴，
+               利用类目轴自下而上的特性，让第一名显示在最上方 -->
           <div ref="userBarEl" class="chart"></div>
         </div>
       </el-col>
@@ -155,6 +175,8 @@
             <h4 class="it-section-title" style="margin:0">问题类别排名</h4>
             <span class="mini-note">共 {{ data.problemRank.kinds || 0 }} 类</span>
           </div>
+          <!-- 容器名仍叫 paretoEl（历史命名，跟后端接口一起保留），但图已经不是帕累托：
+               累计占比折线与 80% 参考线都删了，只剩各类别工单量的排名柱 -->
           <div ref="paretoEl" class="chart"></div>
         </div>
       </el-col>
@@ -174,6 +196,7 @@
             <h4 class="it-section-title" style="margin:0">人员工单明细排名</h4>
             <span class="mini-note">点击姓名可查看该员工本期工单明细</span>
           </div>
+          <!-- 排名前三整行浅色高亮；完成率只在有受理量时才算，否则一列全是 0% 容易误读 -->
           <el-table :data="data.userRank" size="small" :row-class-name="rankRowClass" empty-text="暂无数据">
             <el-table-column label="#" width="46">
               <template #default="{ $index }"><span class="rank-no" :class="'top' + ($index + 1)">{{ $index + 1 }}</span></template>
@@ -213,7 +236,11 @@
           <div v-if="!overdue.list.length" class="empty">当前没有未闭环工单，状态良好</div>
           <template v-else>
             <!-- 固定高度 + 内部滚动：积压几十单也不会把整页拉长 -->
+            <!-- 首屏第一页随总览接口一起返回，翻页才单独调 getAnalyticsOverdue，
+                 这样切页不会把整页指标重算一遍 -->
             <div class="ov-list">
+              <!-- 超 24 小时（1440 分钟）把时长标红；超 72 小时（4320 分钟）整条加红底，
+                   分级是为了让「挂了一天」和「挂了三天」在视觉上能区分开 -->
               <div v-for="t in overdue.list" :key="t.ticket_id" class="overdue-item" :class="{ serious: (t.age_min || 0) >= 4320 }">
                 <div class="ov-top">
                   <span class="ov-hours" :class="{ 'danger-text': (t.age_min || 0) >= 1440 }">已挂 {{ ageText(t) }}</span>
@@ -237,6 +264,8 @@
     </el-row>
 
     <!-- 人员维度分析：选定一名员工，只看他自己的工单情况 -->
+    <!-- 口径：受理/完成按所选人员区间统计（已指派给他的单算他的），
+         而「当前积压」「超时未完成」是时点值 —— 区间数字和时点数字不能相加，也不能互相校验 -->
     <div class="it-card" style="margin-bottom:14px">
       <div class="it-between person-head">
         <div>
@@ -316,6 +345,7 @@
       <el-col :md="15">
         <div class="it-card">
           <h4 class="it-section-title">近 6 个月月度趋势（复盘用）</h4>
+          <!-- 固定看最近 6 个自然月，不跟随顶部时间维度：这是给月度复盘用的长周期视角 -->
           <div ref="monthlyEl" class="chart"></div>
         </div>
       </el-col>
@@ -353,9 +383,12 @@ import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import R from '../api'
 
+// 顶部时间维度：整页指标、图表、汇报要点都按它取数；与下方人员分析的 personRange 相互独立
 const range = ref('month')
 const loading = ref(false)
+// 「汇报口径说明」折叠面板是否展开，纯前端状态，不进接口
 const showTips = ref(false)
+// 总览数据：后端一次性返回的聚合结果（指标、各类排名、月度趋势、SLA/满意度/故障）
 const data = reactive({
   range_label: '',
   prev_label: '',
@@ -371,8 +404,11 @@ const data = reactive({
   satisfy: { score: 0, count: 0, good_rate: 0, bad: 0 },
   incident: { total: 0, ongoing: 0, serious: 0, avg_hours: 0, avg_respond_min: 0, byLevel: [] }
 })
+// 核心指标单独拆出来并给全默认值：后端某期无数据时字段可能缺省，
+// 模板里直接 m.accepted 就不会出现 undefined
 const m = reactive({ accepted: 0, done: 0, done_rate: 0, avg_hours: 0, backlog: 0, over24: 0, over72: 0, per_capita: 0, active_users: 0, accepted_diff: 0, done_diff: 0, hours_diff: 0, kb_total: 0, kb_new: 0 })
 
+// 六张主图表的 DOM 容器，绘制统一走 render() 复用实例
 const trendEl = ref(null)
 const userBarEl = ref(null)
 const paretoEl = ref(null)
@@ -380,6 +416,7 @@ const appBarEl = ref(null)
 const monthlyEl = ref(null)
 const deptEl = ref(null)
 
+// 人员工单明细抽屉：点姓名下钻用，只读不提供编辑
 const drawer = ref(false)
 const drawerTitle = ref('')
 const drawerLoading = ref(false)
@@ -387,6 +424,12 @@ const userTickets = ref([])
 
 /* ---------- 超期未闭环：独立分页（默认 10 条/页，列表区固定高度滚动） ---------- */
 const overdue = reactive({ list: [], total: 0, page: 1, size: 10 })
+/**
+ * 翻页：只取超期列表这一小块，不动整页指标。
+ * total / page / size 以接口回传为准（后端可能校正页码，例如超出末页时回退）。
+ *
+ * @param {number} page 目标页码，从 1 开始
+ */
 async function loadOverdue(page) {
   const p = Number(page) || 1
   try {
@@ -399,7 +442,9 @@ async function loadOverdue(page) {
 }
 
 /* ---------- 人员维度分析 ---------- */
+// 选中的员工 ID（为空时不请求）；下拉选项直接复用人员排名列表，避免多打一次接口
 const personId = ref(null)
+// 人员分析自己的时间区间，与顶部 range 解耦：可以看「本月全团队、某人今日」这种组合
 const personRange = ref('month')
 const personLoading = ref(false)
 const personTrendEl = ref(null)
@@ -414,6 +459,7 @@ const person = reactive({
   recent: []
 })
 
+// 清空选择时不请求，保留上一次的展示内容，避免整块瞬间变空白再回填
 async function loadPerson() {
   if (!personId.value) return
   personLoading.value = true
@@ -429,6 +475,8 @@ async function loadPerson() {
   }
 }
 
+// 人员分析的两张图：趋势（受理柱 + 完成折线）、问题类别横向条形。
+// 类别没有数据时不渲染，容器用 v-show 隐藏，所以这里要先判长度再画
 function drawPerson() {
   const c = C()
   const trend = person.trend || []
@@ -472,6 +520,7 @@ function ageText(t) {
   return rh ? `${d} 天 ${rh} 小时` : `${d} 天`
 }
 
+// 体检失败不阻塞主流程：提示条不出现即可，指标照常展示
 async function loadHealth() {
   try {
     const h = await R.getDataHealth()
@@ -479,6 +528,7 @@ async function loadHealth() {
   } catch { /* 体检失败不阻塞主流程 */ }
 }
 
+// 一键修复后必须重新拉一遍总览：脏数据改完，平均值与趋势都会跟着变
 async function onRepair() {
   repairing.value = true
   try {
@@ -490,11 +540,14 @@ async function onRepair() {
 }
 
 /* ---------- 主题感知 ---------- */
+// 主题色从 CSS 变量读：深色/浅色切换后图表颜色要跟着变，不能在 option 里写死十六进制
 const isDark = () => document.documentElement.classList.contains('dark')
+// 取 CSS 变量并给兜底值：变量未定义时至少还能看出图，不至于整片空白
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
 }
+// 每次绘制时现取一遍调色板，保证暗色模式下重新 load 也能拿到新色值
 const C = () => ({
   primary: cssVar('--it-primary', '#2f6fed'),
   success: cssVar('--it-success', '#18a058'),
@@ -504,6 +557,7 @@ const C = () => ({
   sub: isDark() ? '#93a0b5' : '#8a93a6',
   split: isDark() ? '#2e3644' : '#eef1f6'
 })
+// 坐标轴公共样式：轴线、刻度文字、分割线统一走主题色，避免每张图各写一套
 function axisCommon() {
   const c = C()
   return {
@@ -512,6 +566,8 @@ function axisCommon() {
     splitLine: { lineStyle: { color: c.split } }
   }
 }
+// 统一绘制入口：复用实例 + notMerge=true 全量替换 option。
+// 用 true 是必须的——否则上一份 option 里的 series 会残留，切维度后柱子叠成两套
 function render(el, option) {
   if (!el) return
   let c = echarts.getInstanceByDom(el)
@@ -520,6 +576,8 @@ function render(el, option) {
 }
 
 /* ---------- 加载 ---------- */
+// 整页取数：总览接口与数据体检并行，体检慢也不拖累指标；
+// 超期列表第一页随总览一起返回，页码因此重置为 1
 async function load() {
   loading.value = true
   try {
@@ -530,6 +588,7 @@ async function load() {
     overdue.list = d.overdue || []
     overdue.total = Number(d.overdue_total || 0)
     overdue.page = 1
+    // 等 DOM 按新数据切换完（空态提示 / 图表容器的 v-show）再绘制
     await nextTick()
     drawAll()
   } catch (e) {
@@ -539,6 +598,7 @@ async function load() {
   }
 }
 
+// 环比差值文案：正数补 +，0 与负数原样输出（时长环比另走 hoursDiffText，语义是「快/慢」）
 function diffText(d) {
   const n = Number(d || 0)
   if (n > 0) return '+' + n
@@ -551,16 +611,23 @@ const hoursDiffText = computed(() => {
   if (n < 0) return `快 ${Math.abs(n)} 小时`
   return '持平'
 })
+// 完成率配色：≥90 绿、≥60 黄、其余红，用来一眼扫出掉队的行
 function rateClass(r) {
   if (r >= 90) return 'rate-good'
   if (r >= 60) return 'rate-mid'
   return 'rate-bad'
 }
+// 前三名整行加浅底色（配合 # 列的红/黄/蓝色序号）
 function rankRowClass({ rowIndex }) {
   return rowIndex < 3 ? 'rank-top-row' : ''
 }
 
 /* ---------- 图表 ---------- */
+/**
+ * 受理 / 完成趋势：受理柱 + 完成折线。
+ * X 轴标签按 key 长度判断粒度——两位数是小时补 :00，10 位以上是日期只留「月-日」，
+ * 这样今日/本周/本月/本年共用一套绘制逻辑。
+ */
 function drawTrend() {
   const c = C()
   const keys = data.trend.map(t => String(t.key))
@@ -580,6 +647,8 @@ function drawTrend() {
   })
 }
 
+// 人员产出：只画完成量 > 0 的前 10 名。0 单的人不画（否则下方全是空条），
+// reverse 让第一名落在图表顶部
 function drawUserBar() {
   const c = C()
   const rows = data.userRank.filter(u => u.done_cnt > 0).slice(0, 10).reverse()
@@ -600,6 +669,8 @@ function drawUserBar() {
   })
 }
 
+// 问题类别排名：函数名沿用 drawPareto（容器与后端字段都还叫 pareto），
+// 实际只剩单系列柱状图，帕累托的累计占比折线与 80% 参考线已整体删除
 function drawPareto() {
   const c = C()
   const list = data.problemRank.list || []
@@ -635,6 +706,8 @@ function drawPareto() {
   })
 }
 
+// 应用系统排名：取前 8 名后 reverse，最后一条（即第一名）单独用警示色，
+// 标签里顺带带上占比，省一次 tooltip 悬停
 function drawAppBar() {
   const c = C()
   const list = [...(data.appRank.list || [])].slice(0, 8).reverse()
@@ -655,6 +728,8 @@ function drawAppBar() {
   })
 }
 
+// 近 6 个月双柱：受理按发生月、完成按完成月，同一张单可能落在相邻两个月，
+// 所以两根柱子的高度差不能直接当成「当月没干完」
 function drawMonthly() {
   const c = C()
   const rows = data.monthlyTrend || []
@@ -671,6 +746,7 @@ function drawMonthly() {
   })
 }
 
+// 报障部门排名：按报障部门（不是处理人部门）统计前 8，用来看问题从哪儿冒出来
 function drawDept() {
   const c = C()
   const list = [...(data.deptRank.list || [])].slice(0, 8).reverse()
@@ -691,11 +767,14 @@ function drawDept() {
   })
 }
 
+// 六张图一起重绘：切换时间维度或刷新都只走这一个入口，避免漏画某一张
 function drawAll() {
   drawTrend(); drawUserBar(); drawPareto(); drawAppBar(); drawMonthly(); drawDept()
 }
 
 /* ---------- 汇报要点（规则生成） ---------- */
+// 要点由固定规则拼装，不调大模型：条目顺序固定，
+// 便于把上月和本月的要点并排贴进月报里逐条对照
 const brief = computed(() => {
   const out = []
   const label = data.range_label || '本期'
@@ -713,6 +792,8 @@ const brief = computed(() => {
     : `平均处理时长 <b>${m.avg_hours} 小时</b>，${speed}；人均完成 <b>${m.per_capita} 单</b>（${m.active_users} 人参与）。` })
 
   // 3. 问题类别集中度（重点）
+  // 口径：按累计占比累加到 80% 为止截断，取出来的这几类就是「治理重点」。
+  // 图上的帕累托折线虽然删了，这里仍沿用二八思路算关键类别
   const pl = data.problemRank.list || []
   const pTotal = data.problemRank.total || 0
   if (pl.length) {
@@ -782,6 +863,8 @@ const brief = computed(() => {
   return out
 })
 
+// 复制要点：先剥掉 <b> 等标签再进剪贴板（微信/邮件里粘出来保留 HTML 反而乱码）。
+// 浏览器在非安全上下文（http 或未授权）会拒绝写剪贴板，这里给出降级提示
 async function copyBrief() {
   const text = `【${data.range_label || '本期'} IT 运维工作汇报】\n` + brief.value
     .map((b, i) => `${i + 1}. ${b.text.replace(/<[^>]+>/g, '')}`)
@@ -795,6 +878,8 @@ async function copyBrief() {
 }
 
 /* ---------- 下钻 ---------- */
+// 看某人的明细时沿用顶部时间维度 range（抽屉标题里的区间也是它），
+// 不跟随人员分析面板的 personRange，避免两边标题对不上
 async function openUser(row) {
   drawerTitle.value = `${row.real_name || row.username} · ${data.range_label || '本期'}工单明细`
   drawer.value = true
@@ -808,6 +893,7 @@ async function openUser(row) {
   }
 }
 
+// 只 resize 已初始化的实例（人员分析未选人时那两张图还不存在）
 function resize() {
   ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value,
     personTrendEl.value, personTypeEl.value].forEach(el => {
@@ -817,9 +903,11 @@ function resize() {
 }
 
 onMounted(() => {
+  // 进场即取数，不做轮询：数据变化靠「刷新」按钮手动触发
   load()
   window.addEventListener('resize', resize)
 })
+// 卸载时逐个 dispose：Analytics 有 8 个图表实例，不清理会随路由切换持续涨内存
 onBeforeUnmount(() => {
   ;[trendEl.value, userBarEl.value, paretoEl.value, appBarEl.value, monthlyEl.value, deptEl.value,
     personTrendEl.value, personTypeEl.value].forEach(el => {
@@ -846,6 +934,9 @@ onBeforeUnmount(() => {
 .metric-card .m-val small { font-size: 12px; font-weight: 400; opacity: 0.9; }
 .metric-card .m-label .sub { font-size: 11px; opacity: .85; }
 .metric-card .m-label { font-size: 12px; opacity: 0.92; margin-top: 4px; }
+/* 注意：这里用的是裸类名（.blue / .red / .orange…），仅靠 scoped 的 data-v 属性隔离。
+   同一套渐变在 Dashboard.vue 里写成了 .metric-card.blue 带前缀的形式，
+   新增色名时不要图省事直接写裸类名，容易和别的组件串色 */
 .blue { background: linear-gradient(135deg, #2f6fed, #5b8def); }
 .green { background: linear-gradient(135deg, #18a058, #36c47e); }
 .orange { background: linear-gradient(135deg, #f0a020, #f7b84b); }

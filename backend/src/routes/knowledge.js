@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/knowledge.js
+ * @description 条目增删改查、关键词推荐、AI 归类整理、附件内容解析
+ *
+ * 知识库路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const fs = require('fs')
@@ -10,18 +22,40 @@ const ai = require('../utils/ai')
 
 router.use(auth)
 
+/**
+ * 知识库读范围：默认只看自己沉淀的条目，管理员/审计员带 all=1 才看全员。
+ * 与写范围分开，是因为读接口会带 all 参数、写接口不会。
+ *
+ * @param {import('express').Request} req
+ * @returns {{clause: string, params: number[]}}
+ */
 function scope(req) {
   if (isViewAll(req.user.role) && req.query.all === '1') return { clause: '', params: [] }
   return { clause: 'AND user_id = ?', params: [req.user.user_id] }
 }
 
 // 写操作不受 all=1 限制：管理员/审计员可维护任意条目（前端写操作不带 all 参数）
+/**
+ * 知识库写范围：管理员/审计员不限，其他人只能改自己创建的条目。
+ *
+ * @param {import('express').Request} req
+ * @returns {{clause: string, params: number[]}}
+ */
 function writeScope(req) {
   if (isViewAll(req.user.role)) return { clause: '', params: [] }
   return { clause: 'AND user_id = ?', params: [req.user.user_id] }
 }
 
 // 简单关键词自动提取（CJK 分词较弱，取去噪后的短语 + 字典字段兜底）
+/**
+ * 从正文里粗提关键词：中文不做真正分词，靠去标点后按空白切，再拼上应用系统与问题类别兜底。
+ * 最多留 10 个，够搜索命中就行，不追求精确。
+ *
+ * @param {string} text 方案或摘要原文
+ * @param {string} [app_system]
+ * @param {string} [problem_type]
+ * @returns {string} 逗号分隔的关键词串
+ */
 function extractKeywords(text, app_system, problem_type) {
   const base = [app_system, problem_type].filter(Boolean)
   const cleaned = (text || '').replace(/[\s\r\n，。、；：！？“”‘’（）【】《》,.;:!?()]/g, ' ').trim()
@@ -31,6 +65,15 @@ function extractKeywords(text, app_system, problem_type) {
 }
 
 // 列表（筛选 + 关键词搜索）
+/**
+ * 知识条目列表：按应用系统、问题类别、关键词过滤，可选只看已公开到自助门户的条目。
+ * 权限：默认只返回自己的条目，管理员/审计员带 all=1 看全员。
+ * 不分页：知识库是内部沉淀，量级可控，前端用关键词缩小范围。
+ *
+ * @param {import('express').Request} req query: app_system / problem_type / keyword / public / all
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const { app_system, problem_type, keyword, all } = req.query
   const sc = scope(req)
@@ -58,6 +101,15 @@ router.get('/', asyncHandler(async (req, res) => {
 
 // 工单录入时推荐方案：优先 应用系统+问题类别 精准，兜底关键词模糊
 // 同时返回「历史工单」——把工单本身当成知识库，展示之前的处理方式
+/**
+ * 录单时的方案推荐：先按「应用系统 + 问题类别」精准命中，命中不到再退化成关键词模糊搜；
+ * 同时附 8 条已完成的相似历史工单，把工单本身也当作知识来源。
+ * 权限：只查自己的数据（user_id 恒取当前登录人）。
+ *
+ * @param {import('express').Request} req query: app_system / problem_type / keyword
+ * @param {import('express').Response} res { knowledge, history }
+ * @returns {Promise<void>}
+ */
 router.get('/recommend', asyncHandler(async (req, res) => {
   const { app_system, problem_type, keyword } = req.query
   const uid = req.user.user_id
@@ -103,12 +155,31 @@ router.get('/recommend', asyncHandler(async (req, res) => {
   ok(res, { knowledge, history })
 }))
 
+/**
+ * 判断推荐条件是否为空：三个筛选条件全空时直接跳过历史工单查询，
+ * 否则会无条件把「最近 8 条已完成工单」当成推荐，反而干扰录入。
+ *
+ * @param {string} app_system
+ * @param {string} problem_type
+ * @param {string} keyword
+ * @returns {boolean}
+ */
 function k_or_hasFilter(app_system, problem_type, keyword) {
   return !!(app_system || problem_type || keyword)
 }
 
 // AI 整理知识库：把已完成的工单按 应用系统+问题类别 聚类，生成/更新知识条目
 // 配置了 AI 则自动总结处理方案；未配置则规则合并历史处理方式
+/**
+ * 一键整理知识库：把已完成的工单按「应用系统 + 问题类别」聚类，取最近 6 条处理说明，
+ * 有 AI 配置就总结成标准方案，没有就原样合并；同维度已有条目则更新、没有则新建。
+ * 权限：只整理自己的工单与自己名下的条目（user_id 恒为当前登录人）。
+ * 上限 20 组，避免一次触发太多模型调用；单组失败只是退回规则合并，不中断整批。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res { created, updated, skipped, ai_used }
+ * @returns {Promise<void>}
+ */
 router.post('/ai-organize', asyncHandler(async (req, res) => {
   const uid = req.user.user_id
   const groups = await query(
@@ -175,6 +246,15 @@ router.post('/ai-organize', asyncHandler(async (req, res) => {
 }))
 
 // 详情 + 浏览计数
+/**
+ * 知识条目详情，顺手累加 view_count。
+ * 权限：按 scope 判断，别人创建的条目只有管理员/审计员（带 all=1）能看。
+ * 浏览计数用于「哪些知识真的被用上了」，也用于推荐排序（看得多的优先）。
+ *
+ * @param {import('express').Request} req req.params.id 为 kb_id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/:id', asyncHandler(async (req, res) => {
   const sc = scope(req)
   const rows = await query(
@@ -188,6 +268,13 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 新增
+/**
+ * 新建知识条目：没传关键词就自动提取，作者恒为当前登录人。
+ *
+ * @param {import('express').Request} req body: app_system / problem_type / problem_summary / solution / is_public / attachment
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body
   const keyword = b.keyword || extractKeywords(b.solution || b.problem_summary, b.app_system, b.problem_type)
@@ -201,6 +288,14 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // 更新
+/**
+ * 编辑知识条目：只改 body 里出现的字段，空对象直接拒绝。
+ * 权限：writeScope —— 自己创建的；管理员/审计员可改任意条目。
+ *
+ * @param {import('express').Request} req req.params.id 为 kb_id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.put('/:id', asyncHandler(async (req, res) => {
   const sc = writeScope(req)
   const b = req.body
@@ -219,6 +314,13 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 删除
+/**
+ * 删除知识条目。权限：writeScope —— 自己创建的；管理员/审计员可删任意条目。
+ *
+ * @param {import('express').Request} req req.params.id 为 kb_id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.delete('/:id', asyncHandler(async (req, res) => {
   const sc = writeScope(req)
   const result = await query(`DELETE FROM knowledge WHERE kb_id = ? ${sc.clause}`, [req.params.id, ...sc.params])
@@ -227,6 +329,15 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 文档解析：上传文档，自动提取文本回填
+/**
+ * 上传文档并把正文提出来回填到方案输入框，省得运维手敲一遍。
+ * 支持 txt/md/csv/pdf/docx；正文压成一整行并截断 2000 字，避免长文档把输入框撑爆。
+ * 权限：任意已登录用户。
+ *
+ * @param {import('express').Request} req multipart 单文件字段名 file
+ * @param {import('express').Response} res { text, url }
+ * @returns {Promise<void>}
+ */
 router.post('/parse', upload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) return fail(res, '未接收到文件')
   const fp = path.resolve(uploadDir, req.file.filename)

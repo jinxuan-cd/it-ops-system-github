@@ -1,7 +1,13 @@
 {
   "name": "it-ops-frontend",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "IT 运维工单系统前端（Vue3 + Element Plus）",
+  "author": {
+    "name": "锦轩",
+    "email": "2686389727@qq.com"
+  },
+  "license": "SEE LICENSE IN ../LICENSE",
+  "copyright": "Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.",
   "private": true,
   "type": "module",
   "scripts": {

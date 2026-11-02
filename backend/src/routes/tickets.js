@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/tickets.js
+ * @description 工单录入与检索、抢单/派单/释放、完成、批量操作、Excel 导入导出
+ *
+ * 工单主流程路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const fs = require('fs')
@@ -34,6 +46,12 @@ function nowStr() {
 //   1) 完成时间早于发生时间 → 说明录入/导入有误，按发生时间纠正
 //   2) 状态已完成但没有完成时间 → 用发生时间补全
 //   3) 有完成时间但没给状态 → 视为已完成
+/**
+ * 时间与状态的互相兜底，录单、编辑、导入、完成四条链路都走这里，保证口径统一。
+ *
+ * @param {{happen_time?: string|null, finish_time?: string|null, status?: string|null}} o
+ * @returns {{happen_time: string|null, finish_time: string|null, status: string|null}}
+ */
 function normalizeTimes(o) {
   const h = o.happen_time || null
   let f = o.finish_time || null
@@ -54,12 +72,27 @@ function normalizeTimes(o) {
 function canSeeAll(req) {
   return isViewAll(req.user.role) || req.user.role === 'service'
 }
+
+/**
+ * 生成带 t. 前缀的数据隔离条件，供带 JOIN 的查询使用。
+ * 返回 { clause: '', params: [] } 表示不限制（管理员带 all=1 或服务台）。
+ *
+ * @param {import('express').Request} req
+ * @returns {{clause: string, params: number[]}}
+ */
 function scope(req) {
   if (canSeeAll(req) && (req.user.role === 'service' || req.query.all === '1')) return { clause: '', params: [] }
   return { clause: 'AND (t.user_id = ? OR t.assignee_id = ?)', params: [req.user.user_id, req.user.user_id] }
 }
 
 // 不带表别名前缀（用于未取别名的 UPDATE / DELETE / SELECT）
+/**
+ * 同 scope()，但不带别名前缀，用于单表 UPDATE / DELETE。
+ * 与 scope() 的差别：这里不看 all=1，写操作只要角色够就放行，避免「工单不存在或无权限」。
+ *
+ * @param {import('express').Request} req
+ * @returns {{clause: string, params: number[]}}
+ */
 function scopePlain(req) {
   if (canSeeAll(req)) return { clause: '', params: [] }
   return { clause: 'AND (user_id = ? OR assignee_id = ?)', params: [req.user.user_id, req.user.user_id] }
@@ -68,12 +101,31 @@ function scopePlain(req) {
 router.use(auth)
 
 // 附件上传（多文件）
+/**
+ * 接收工单附件并返回相对路径数组，前端把数组 JSON 化后写进 ticket.attachment。
+ * 权限：任意已登录用户（录单、处理、补传凭证共用这一个入口）。
+ *
+ * @param {import('express').Request} req multer 数组字段名为 files
+ * @param {import('express').Response} res
+ * @returns {void}
+ */
 router.post('/upload', upload.array('files', 10), (req, res) => {
   const urls = (req.files || []).map(f => `/uploads/${f.filename}`)
   ok(res, urls)
 })
 
 // 列表（多条件筛选）
+/**
+ * 工单列表：支持关键词、状态、类别、部门、优先级、时间范围、SLA 超期、待接单池等过滤。
+ * 权限：登录即可访问，可见范围由 scope() 决定；管理员/审计员需带 all=1 才看全员，
+ *      服务台天然看全部；pool=1 不受归属限制（公海单所有人都要能看见才能抢）。
+ * 分页：传 page_size 才分页（上限 200），否则返回全量数组，兼容待办面板与报表的老调用。
+ * 时间口径：按 happen_time（发生时间）过滤，end 补 23:59:59，避免当天下午的单被漏掉。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const { start, end, dept, app_system, problem_type, status, keyword, all, user_id,
     priority, assignee_id, source, sla, mine } = req.query
@@ -150,6 +202,13 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 可指派的工程师列表（任何登录用户都可读，用于工单指派下拉）
+/**
+ * 可指派工程师名单：只返回启用账号，并排除审计员（只读角色，派给他也处理不了）。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/staff', asyncHandler(async (req, res) => {
   const rows = await query(
     "SELECT user_id, username, real_name, role FROM sys_user WHERE is_enable = 1 AND role <> 'auditor' ORDER BY role, user_id"
@@ -158,6 +217,15 @@ router.get('/staff', asyncHandler(async (req, res) => {
 }))
 
 // 待接单池（右下角接单弹窗 / 工单页「待接单」筛选共用）
+/**
+ * 公海工单池：所有未指派且状态为待接单的工单，按 紧急→高→普通→低、再按发生时间正序（先来先办）。
+ * 只取 50 条：这是给弹窗用的实时提醒列表，不是台账全量。
+ * 权限：任意已登录用户，不受工单归属隔离限制。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/pool', asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT t.*, u.real_name FROM ticket t LEFT JOIN sys_user u ON u.user_id = t.user_id
@@ -173,6 +241,15 @@ router.get('/pool', asyncHandler(async (req, res) => {
 }))
 
 // 详情（待接单的工单所有运维都能看，否则点待办会提示无权限）
+/**
+ * 工单详情：带上报人与处理人姓名，并按 SLA 截止时间算出当前超期状态。
+ * 权限：管理员/审计员/服务台可看全部；其他人只能看「自己报的 + 派给自己的 + 还未接单的公海单」，
+ *      审计员只读，因此不给它开公海单的例外。
+ *
+ * @param {import('express').Request} req req.params.id 为工单号
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/:id', asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT t.*, u.real_name, a.real_name AS assignee_name FROM ticket t
@@ -193,6 +270,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 创建
+/**
+ * 新建工单：录单人自动成为 user_id，可顺手指派给自己（assign_me）或直接投公海（pool）。
+ * 权限：任意已登录用户。
+ * 口径提醒：user_id 是「报障人/录单人」而不是「处理人」，扫码报障走 publicApi 时 user_id 会是 0，
+ *          所以统计归属一律用 COALESCE(assignee_id, NULLIF(user_id,0))，别直接拿 user_id 分组。
+ *
+ * @param {import('express').Request} req body 可含 happen_time/finish_time/status/priority/attachment/pool/assign_me
+ * @param {import('express').Response} res 返回 { ticket_id, notified }
+ * @returns {Promise<void>}
+ */
 router.post('/', asyncHandler(async (req, res) => {
   const b = { ...req.body }
   // 先做时间有效性纠正，再落库
@@ -247,6 +334,16 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // 更新
+/**
+ * 编辑工单：只更新 body 里出现的字段，其余保持原值。
+ * 权限：自己报的或派给自己的单；管理员/审计员/服务台可改全部。
+ * 时间联动：改成处理中/待接单会清空完成时间，清空完成时间会把状态回退到处理中，
+ *          改了发生时间/问题类别/优先级会重算 SLA 截止时间。
+ *
+ * @param {import('express').Request} req req.params.id 为工单号
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.put('/:id', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const b = { ...req.body }
@@ -294,6 +391,15 @@ router.put('/:id', asyncHandler(async (req, res) => {
 // 指派 / 转派 / 派单：把工单交给指定工程师
 //   服务台派单：待接单 → 处理中
 //   运维转单：处理中 → 换负责人（原负责人看不到，由新负责人继续）
+/**
+ * 指派/转派/服务台派单：把工单挂到指定工程师名下，首次指派同时写 respond_time。
+ * 权限：管理员/审计员/服务台可派任何单；普通运维只能转自己名下的单。
+ * 副作用：关掉其他运维的接单提醒待办、广播工单变更、给被指派人单独推一条提醒。
+ *
+ * @param {import('express').Request} req body.assignee_id 目标工程师 ID
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/:id/assign', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const rows = await query(`SELECT * FROM ticket WHERE ticket_id = ? ${sc.clause}`, [req.params.id, ...sc.params])
@@ -339,6 +445,15 @@ router.post('/:id/assign', asyncHandler(async (req, res) => {
 }))
 
 // 接取工单（抢单）：数据库原子更新，只有第一个人能接走，后面的人会收到「已被接取」
+/**
+ * 抢单：把公海里的待接单工单挂到自己名下，并把状态推进到处理中。
+ * 权限：除审计员（只读）外的已登录用户；重复接自己的单按成功处理，避免误报。
+ * 并发：靠 WHERE assignee_id IS NULL AND status='pending' 做乐观锁，affectedRows=0 即被抢先。
+ *
+ * @param {import('express').Request} req req.params.id 为工单号
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/:id/claim', asyncHandler(async (req, res) => {
   if (req.user.role === 'auditor') return fail(res, '审计员为只读账号，不能接单', 1, 403)
   const rows = await query('SELECT * FROM ticket WHERE ticket_id = ?', [req.params.id])
@@ -375,6 +490,14 @@ router.post('/:id/claim', asyncHandler(async (req, res) => {
 }))
 
 // 退回待接单池：接错了 / 忙不过来又没人可转时，把单放回池子重新分配
+/**
+ * 退回公海：清掉负责人与指派时间，状态回到待接单，并重新给全员发接单提醒。
+ * 权限：自己名下的单；管理员/审计员/服务台可退全部。已完成的单不允许退回。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res 返回重新通知到的人数
+ * @returns {Promise<void>}
+ */
 router.post('/:id/release', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const rows = await query(`SELECT * FROM ticket WHERE ticket_id = ? ${sc.clause}`, [req.params.id, ...sc.params])
@@ -392,6 +515,16 @@ router.post('/:id/release', asyncHandler(async (req, res) => {
 }))
 
 // 标记完成 + 同步知识库
+/**
+ * 完成工单：写完成时间与处理说明，按需把处理方案同步进知识库。
+ * 权限：自己名下的单；管理员/审计员/服务台可完成全部。
+ * 口径：finish_time 是「完成量」的唯一依据，缺它会让时长统计、完成率、月度环比全部失真，
+ *      因此这里一定会兜出一个完成时间；respond_time 若为空也顺手补上，保证响应达成率可算。
+ *
+ * @param {import('express').Request} req body 可含 finish_time/handle_desc/sync_kb/solution
+ * @param {import('express').Response} res 返回 { ticket_id, kb_id }
+ * @returns {Promise<void>}
+ */
 router.post('/:id/complete', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const { finish_time, handle_desc, sync_kb, app_system, problem_type, service_content, solution } = req.body
@@ -433,6 +566,12 @@ router.post('/:id/complete', asyncHandler(async (req, res) => {
 
 // ============ 批量操作 ============
 // 解析 id 列表（支持数组或逗号串），单次上限 1000 条，防止误操作和长事务
+/**
+ * 把 ids 归一成去重后的正整数数组，单次最多 1000 条，防止一次误传全表拖死数据库。
+ *
+ * @param {number[]|string} v 数组或以逗号分隔的字符串
+ * @returns {number[]}
+ */
 function idList(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(',')
   return [...new Set(arr.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 1000)
@@ -440,6 +579,14 @@ function idList(v) {
 function placeholders(n) { return Array(n).fill('?').join(',') }
 
 // 批量删除（普通用户仅能删自己的，管理员/审计员看全部时受 all=1 控制）
+/**
+ * 批量删除工单，并连带清掉这些工单产生的接单提醒待办（否则待办里留死链点不开）。
+ * 权限：受 scopePlain 限制，普通用户只能删自己报的或派给自己的。
+ *
+ * @param {import('express').Request} req body.ids 支持数组或逗号串
+ * @param {import('express').Response} res 返回 deleted 实际删除条数
+ * @returns {Promise<void>}
+ */
 router.post('/batch-delete', asyncHandler(async (req, res) => {
   const ids = idList(req.body.ids)
   if (!ids.length) return fail(res, '请先选择工单')
@@ -454,6 +601,14 @@ router.post('/batch-delete', asyncHandler(async (req, res) => {
 }))
 
 // 批量标记完成
+/**
+ * 批量完成：完成时间取「发生时间与当前时间的较晚者」，保证不出现完成早于发生的脏数据。
+ * 权限：受 scopePlain 限制。
+ *
+ * @param {import('express').Request} req body.ids
+ * @param {import('express').Response} res 返回 updated 条数
+ * @returns {Promise<void>}
+ */
 router.post('/batch-complete', asyncHandler(async (req, res) => {
   const ids = idList(req.body.ids)
   if (!ids.length) return fail(res, '请先选择工单')
@@ -475,6 +630,14 @@ router.post('/batch-complete', asyncHandler(async (req, res) => {
 }))
 
 // 批量改状态（处理中 / 已完成）
+/**
+ * 批量改状态：done 时补完成时间，processing 时清空完成时间，保持「状态与完成时间一致」。
+ * 权限：受 scopePlain 限制。
+ *
+ * @param {import('express').Request} req body.ids、body.status（非 done 一律按处理中）
+ * @param {import('express').Response} res 返回 updated 条数
+ * @returns {Promise<void>}
+ */
 router.post('/batch-status', asyncHandler(async (req, res) => {
   const ids = idList(req.body.ids)
   const status = req.body.status === 'done' ? 'done' : 'processing'
@@ -493,6 +656,14 @@ router.post('/batch-status', asyncHandler(async (req, res) => {
 }))
 
 // 删除
+/**
+ * 删除单条工单，并清掉它的接单提醒待办。
+ * 权限：自己报的或派给自己的单；管理员/审计员/服务台可删全部。
+ *
+ * @param {import('express').Request} req req.params.id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.delete('/:id', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const result = await query(`DELETE FROM ticket WHERE ticket_id = ? ${sc.clause}`, [req.params.id, ...sc.params])
@@ -504,6 +675,15 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // Excel 导出（与原表格式对齐；传 ids 时只导出选中行）
 // 数据范围与筛选条件必须与列表页完全一致：否则会出现「列表 3 条、导出上千条」
+/**
+ * 导出工单 Excel：列与原纸质台账对齐，传 ids 时只导出勾选行。
+ * 权限：与列表接口同一套 scope 规则，导不出自己看不到的单。
+ * 口径：筛选同样按 happen_time，end 补 23:59:59；状态列中 pending 显示「待接单」。
+ *
+ * @param {import('express').Request} req 支持与列表一致的查询参数 + ids
+ * @param {import('express').Response} res 直接写出 xlsx 流
+ * @returns {Promise<void>}
+ */
 router.get('/export/excel', asyncHandler(async (req, res) => {
   const { start, end, dept, app_system, problem_type, status, keyword, priority, mine } = req.query
   const pool = req.query.pool === '1'
@@ -600,6 +780,12 @@ function cellText(v) {
   return String(v).trim()
 }
 // Excel 日期转 'YYYY-MM-DD HH:mm:ss'（ExcelJS 的 Date 以 UTC 承载墙钟时间）
+/**
+ * 统一成 MySQL 可接受的日期串，顺带把「2026年10月29日」这类中文写法纠正过来。
+ *
+ * @param {Date|string|number|null} v 单元格原始值
+ * @returns {string|null} 无法识别时返回 null，交给上层按未填写处理
+ */
 function toDateTimeStr(v) {
   if (v == null || v === '') return null
   if (v instanceof Date && !isNaN(v)) {
@@ -610,6 +796,16 @@ function toDateTimeStr(v) {
   return s || null
 }
 
+/**
+ * 从 Excel 批量导入历史工单：按表头名认列，容忍中文日期写法，逐行校验后回写结果。
+ * 权限：任意已登录用户，导入的工单 user_id 记为当前用户。
+ * 口径：有完成时间即视为已完成，完成早于发生的按发生时间纠正并计入 corrected 供前端提示；
+ *      导入结束后统一 backfillSla() 补算 SLA，避免历史数据没有截止时间而统计不出超期。
+ *
+ * @param {import('express').Request} req multipart 单文件字段名为 file，仅支持 .xlsx
+ * @param {import('express').Response} res 返回 { inserted, failed[], corrected[] }
+ * @returns {Promise<void>}
+ */
 router.post('/import/excel', upload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) return fail(res, '请选择要导入的 xlsx 文件')
   const wb = new ExcelJS.Workbook()

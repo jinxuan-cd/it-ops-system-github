@@ -1,5 +1,16 @@
+<!--
+  扫码报障页 —— IT 运维工单台账与日报自动管理系统
+  免登录报障入口，支持 Ctrl+V 粘贴故障截图，可查询处理进度与评价
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="pub-page">
+    <!-- 免登录门户头：本页由 IT 生成带入口密钥的链接/二维码分发，员工扫码即可报障，不需要账号 -->
     <div class="pub-head">
       <div class="logo">IT</div>
       <div>
@@ -8,12 +19,14 @@
       </div>
     </div>
 
+    <!-- 后台关掉自助报障时只给提示、不渲染表单，避免用户填完一大段才发现提交不了 -->
     <div v-if="!enabled" class="pub-card center">
       <el-icon size="40" color="var(--it-warning)"><WarningFilled /></el-icon>
       <h3>自助报障暂未开放</h3>
       <p>请联系 IT 同事直接报障。</p>
     </div>
 
+    <!-- 入口密钥不匹配（换过密钥、链接被转发或手改过 k）：不给重试入口，引导重新扫码拿新链接 -->
     <div v-else-if="badKey" class="pub-card center">
       <el-icon size="40" color="var(--it-danger)"><CircleCloseFilled /></el-icon>
       <h3>报障入口校验失败</h3>
@@ -21,6 +34,7 @@
     </div>
 
     <template v-else>
+      <!-- 两个页签共用同一套入口密钥：报障和查进度都不需要登录，靠 k 判断门户是否开放 -->
       <div class="pub-tabs">
         <div class="pub-tab" :class="{ on: tab === 'report' }" @click="tab = 'report'">我要报障</div>
         <div class="pub-tab" :class="{ on: tab === 'track' }" @click="tab = 'track'">查询进度</div>
@@ -28,6 +42,7 @@
 
       <!-- 报障 -->
       <div v-show="tab === 'report'" class="pub-card">
+        <!-- 提交成功后整块换成结果页：免登录场景拿不到用户身份，报障单号就是唯一查询凭证 -->
         <template v-if="submittedNo">
           <div class="done-box">
             <el-icon size="44" color="var(--it-success)"><CircleCheckFilled /></el-icon>
@@ -41,6 +56,7 @@
         </template>
 
         <template v-else>
+          <!-- 报障表单：只有姓名和问题描述必填，部门/手机号/系统选填，扫码即填的门槛越低越好 -->
           <div class="field">
             <label>您的姓名 <i>*</i></label>
             <el-input v-model="form.contact" placeholder="方便我们联系您" size="large" maxlength="20" />
@@ -65,6 +81,7 @@
           </div>
           <div class="field">
             <label>紧急程度</label>
+            <!-- 让报障人自己先分级：SLA 按「问题类别 + 优先级」匹配时限，进来前定档比进线后再改更准 -->
             <div class="pri-row">
               <div v-for="p in PRIORITIES" :key="p.value" class="pri" :class="[p.value, { on: form.priority === p.value }]"
                 @click="form.priority = p.value">
@@ -83,6 +100,7 @@
       </div>
 
       <!-- 查询 -->
+      <!-- 进度查询：单号 + 手机号后 4 位，用轻量的二次校验挡住按单号顺序逐个试的爬取 -->
       <div v-show="tab === 'track'" class="pub-card">
         <div class="field">
           <label>报障单号</label>
@@ -94,6 +112,7 @@
         </div>
         <el-button type="primary" size="large" class="submit" :loading="tracking" @click="onTrack">查询</el-button>
 
+        <!-- 结果卡只回显对外可露出的字段：内部处理人、工时、SLA 等一律不下发给公网 -->
         <div v-if="result" class="result">
           <div class="r-head">
             <el-tag :type="result.status === 'done' ? 'success' : result.status === 'pending' ? 'info' : 'warning'" effect="dark">
@@ -110,6 +129,7 @@
             <p>{{ result.result }}</p>
           </div>
 
+          <!-- 只有「已完成且尚未评价」的单子才出评价框，can_satisfy 由后端判定，前端不自己猜 -->
           <div v-if="result.can_satisfy" class="rate-box">
             <div class="label">本次服务您满意吗？</div>
             <el-rate v-model="rate.score" :texts="['很不满意', '不满意', '一般', '满意', '非常满意']" show-text size="large" />
@@ -136,14 +156,22 @@ import { ElMessage } from 'element-plus'
 import R from '../api'
 
 const route = useRoute()
+// 入口密钥：从 URL 上的 k 取，之后每个 /api/public/* 请求都要带上。
+// 后端据此判断这个链接是否还开放，密钥轮换后旧二维码会自动失效。
 const KEY = String(route.query.k || '')
 
+// 门户是否开启自助报障（后端配置项，关掉就只显示提示）
 const enabled = ref(true)
+// 密钥校验失败标记：只有「配置了密钥但本链接的 k 对不上」时才为真
 const badKey = ref(false)
+// 常见问题入口是否开放：关掉后页脚不引导去 /faq
 const faqEnabled = ref(true)
+// 当前页签：report 报障 / track 查进度
 const tab = ref('report')
 
+// 下拉字典（部门、应用系统、问题类别），统一由 /api/public/options 下发，公网不读内部字典表
 const options = reactive({ dept: [], app_system: [], problem_type: [] })
+// 紧急程度档位与后端 priority 枚举一一对应，直接决定 SLA 时限
 const PRIORITIES = [
   { value: 'urgent', label: '很急' },
   { value: 'high', label: '较急' },
@@ -151,16 +179,23 @@ const PRIORITIES = [
   { value: 'low', label: '不急' }
 ]
 
+// 报障表单。免登录链路只收文本：本页拿不到账号身份，附件不在这条链路上收集；
+// 需要 Ctrl+V 粘贴故障截图的场景走登录后的建单页（/tickets 新建），那边有身份可追溯。
 const form = reactive({ contact: '', dept: '', phone: '', app_system: '', priority: 'normal', content: '' })
 const submitting = ref(false)
+// 提交成功后拿到的报障单号，非空即切到结果页
 const submittedNo = ref('')
 
+// 查询表单：单号必填，手机号后 4 位选填（填了才会做二次校验）
 const track = reactive({ report_no: '', phone: '' })
 const tracking = ref(false)
+// 查询结果：null 表示还没查或查无此单
 const result = ref(null)
 const rate = reactive({ score: 0, comment: '' })
 const rating = ref(false)
 
+// 提交报障。姓名与描述先本地挡一道：4 个字以下基本等于没说，
+// 直接提示比让 IT 反复回电追问更省事。
 async function onSubmit() {
   if (!form.contact.trim()) return ElMessage.warning('请填写您的姓名')
   if (form.content.trim().length < 4) return ElMessage.warning('请简单描述遇到的问题')
@@ -171,10 +206,12 @@ async function onSubmit() {
   } catch (e) { ElMessage.error(e.message) } finally { submitting.value = false }
 }
 
+// 清空表单回到填写态，方便同一台设备连续帮同事报多个问题（不清姓名，省得重填）
 function resetReport() {
   submittedNo.value = ''
   Object.assign(form, { dept: '', phone: '', app_system: '', priority: 'normal', content: '' })
 }
+// 从结果页跳去查进度：顺手把单号和手机号后 4 位带过去，省掉用户手抄单号这一步
 function goTrack() {
   track.report_no = submittedNo.value
   track.phone = (form.phone || '').slice(-4)
@@ -182,6 +219,8 @@ function goTrack() {
   onTrack()
 }
 
+// 查询进度。每次查询先清空上一单的结果与评分，
+// 否则切换单号后旧评分会带到新单子上，容易把评价写错对象。
 async function onTrack() {
   if (!track.report_no.trim()) return ElMessage.warning('请填写报障单号')
   tracking.value = true
@@ -193,6 +232,8 @@ async function onTrack() {
   } catch (e) { ElMessage.error(e.message) } finally { tracking.value = false }
 }
 
+// 提交满意度评价。评价成功后重新查一次详情，
+// 让按钮换成「已评价」的只读星级，避免同一单反复打分把满意度数据拉偏。
 async function onRate() {
   if (!rate.score) return ElMessage.warning('请先选择评分')
   rating.value = true
@@ -203,6 +244,8 @@ async function onRate() {
   } catch (e) { ElMessage.error(e.message) } finally { rating.value = false }
 }
 
+// 首屏：先问配置（门户是否开放、密钥是否有效），有效才去拉下拉字典。
+// 顺序不能反——密钥无效时继续拉字典等于白跑一次公网请求。
 onMounted(async () => {
   try {
     const c = await R.publicConfig(KEY)

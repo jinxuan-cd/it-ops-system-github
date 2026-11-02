@@ -1,3 +1,13 @@
+<!--
+  日报月报查阅 —— IT 运维工单台账与日报自动管理系统
+  管理员与审计员查看全员提交情况与内容
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -6,6 +16,7 @@
     </div>
 
     <!-- 提交情况概览（仅日报维度，管理员/审计员关心谁没交） -->
+    <!-- 概览只统计日报：管理员/审计员最关心「今天谁没交」，月报份数只作参考 -->
     <div class="it-card stat-card">
       <div class="stat">
         <div class="stat-num">{{ summary.today_submitted }}<span class="stat-sub">/ {{ summary.expected }}</span></div>
@@ -19,6 +30,7 @@
         <div class="stat-num" :class="{ warn: missing.length > 0 }">{{ missing.length }}</div>
         <div class="stat-label">今日未提交人数</div>
       </div>
+      <!-- 近 7 天提交人数：柱高按当期最大值归一，当天 0 人也占位不消失 -->
       <div class="stat trend">
         <div class="trend-bars">
           <div v-for="t in summary.trend" :key="t.date" class="bar-wrap" :title="`${t.date}：${t.count} 人`">
@@ -31,6 +43,7 @@
       </div>
     </div>
 
+    <!-- 未提交名单单独成块：不用点进列表就能直接点名催交 -->
     <div v-if="missing.length" class="it-card miss-card">
       <div class="miss-head">
         <span class="miss-title">今日未提交（{{ missing.length }}）</span>
@@ -48,6 +61,7 @@
         <!-- ============ 日报 ============ -->
         <el-tab-pane label="团队日报" name="daily">
           <div class="filters">
+            <!-- 日报筛选：人员 / 日期区间 / 正文关键词，任一变化都回到第一页重查 -->
             <el-select v-model="f.user_id" placeholder="全部人员" clearable filterable style="width:150px" @change="searchDaily">
               <el-option v-for="u in staff" :key="u.user_id" :label="u.real_name || u.username" :value="u.user_id" />
             </el-select>
@@ -107,6 +121,7 @@
             <el-empty v-if="!daily.list.length && !loading" description="暂无日报" :image-size="80" />
           </div>
 
+          <!-- 分页只在总数超过一页时出现，数据少的时候不占版面 -->
           <div class="pager" v-if="daily.total > daily.size">
             <el-pagination
               background layout="prev, pager, next, sizes, total"
@@ -128,6 +143,7 @@
             <el-button type="primary" @click="loadMonthly"><el-icon><Search /></el-icon> 查询</el-button>
           </div>
 
+          <!-- 月报顶部直接给「已提交 / 应交」与未提交名单，月度考核口径一眼可查 -->
           <div class="mon-summary">
             本月已提交 <strong>{{ mon.total }}</strong> 份 / 应提交 <strong>{{ mon.expected }}</strong> 人
             <span v-if="mon.missing && mon.missing.length" class="mon-miss">
@@ -187,38 +203,54 @@ import { Search, Refresh, CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import R from '../api'
 
+// 窄屏切卡片视图：日报正文长，表格在手机上挤不开
 const isMobile = ref(window.innerWidth <= 820)
+// 日报与月报共用一个 loading，切 tab 时统一遮罩
 const loading = ref(false)
+// 人员下拉数据源：全量账号，用于按人筛选
 const staff = ref([])
+// 当前 tab 决定详情弹窗按日报还是月报结构渲染
 const tab = ref('daily')
 
+// 概览数字：expected 应交人数、today_submitted 今日已交、month_count 本月份数、trend 近 7 天曲线
 const summary = reactive({ expected: 0, today_submitted: 0, month_count: 0, trend: [] })
+// 今日未提交人员；有人缺交时概览里的「未提交人数」标黄
 const missing = ref([])
+// 未提交名单对应的日期，由后端按服务器时间给，避免前后端时区不一致
 const missingDate = ref('')
 
+// 日报筛选条件：人员 / 日期区间 / 正文关键词
 const f = reactive({ user_id: null, range: [], keyword: '' })
+// 日报分页状态：page 或 size 变化都要重新拉取
 const daily = reactive({ list: [], total: 0, page: 1, size: 20 })
 
+// 月报筛选条件：月份 / 人员 / 关键词
 const m = reactive({ month: '', user_id: null, keyword: '' })
+// 月报列表，加上后端算好的应交人数与未提交名单
 const mon = reactive({ list: [], total: 0, expected: 0, missing: [] })
 
+// 详情弹窗的数据与显隐
 const detailVisible = ref(false)
 const detail = ref(null)
+// 标题按当前 tab 拼「谁 · 哪天 日报/月报」，避免月报详情显示成日报日期
 const detailTitle = computed(() => {
   if (!detail.value) return '报告详情'
   const who = detail.value.real_name || detail.value.username || ''
   return tab.value === 'daily' ? `${who} · ${detail.value.report_date} 日报` : `${who} · ${detail.value.report_month} 月报`
 })
 
+// 列表只显示前 90 字：日报正文可能几千字，全量渲染会明显拖慢表格
 function oneLine(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim()
   return t.length > 90 ? t.slice(0, 90) + '…' : t
 }
+// 柱高按 7 天内最大值归一，最小 4px 保证 0 提交那天也能看见一根线
 function barH(n) {
   const max = Math.max(1, ...(summary.trend || []).map(x => x.count))
   return Math.max(4, Math.round((n / max) * 46))
 }
 
+// 概览与未提交名单分两步取：概览失败不阻断列表，数字缺失好过整页空白
 async function loadSummary() {
   try {
     const d = await R.teamDailySummary()
@@ -229,6 +261,7 @@ async function loadSummary() {
   } catch (e) { /* 概览失败不影响列表 */ }
 }
 
+// 分页与三个筛选条件一起下发；total 用 Number 兜底，防后端返回字符串导致分页算错
 async function loadDaily() {
   loading.value = true
   try {
@@ -242,6 +275,7 @@ async function loadDaily() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 月报不分页，一次拉全月；missing 由后端按「应交人数 - 已提交」算好，前端不重复统计
 async function loadMonthly() {
   loading.value = true
   try {
@@ -257,36 +291,45 @@ async function loadMonthly() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 改筛选一律回第一页，否则会停在越界页码上看到空列表
 function searchDaily() { daily.page = 1; loadDaily() }
+// 翻页只换页码，沿用当前筛选条件
 function onPage(p) { daily.page = p; loadDaily() }
+// 改每页条数后回到第一页，避免页码越界
 function onSize(s) { daily.size = s; daily.page = 1; loadDaily() }
 function resetDaily() {
   f.user_id = null; f.range = []; f.keyword = ''
   daily.page = 1
   loadDaily()
 }
+// 月报只在第一次切过去时加载，来回切 tab 不重复请求
 function onTabChange(name) {
   if (name === 'daily') loadDaily()
   else if (!mon.list.length) loadMonthly()
 }
+// 刷新按钮同时刷概览与当前 tab 的列表，保证数字和内容一致
 function reload() {
   loadSummary()
   if (tab.value === 'daily') loadDaily()
   else loadMonthly()
 }
 
+// 先用列表行立即渲染，再请求详情覆盖：详情接口失败也能看到列表里的内容
 async function openDaily(row) {
   detail.value = row
   detailVisible.value = true
   // 详情接口返回完整内容（列表里已是全文，这里仍走一次以兼容分页裁剪）
   try { detail.value = await R.teamDailyDetail(row.report_id) } catch { /* 用列表数据兜底 */ }
 }
+// 同 openDaily：先渲染再取详情，失败时回落到列表数据
 async function openMonthly(row) {
   detail.value = row
   detailVisible.value = true
   try { detail.value = await R.teamMonthlyDetail(row.report_id) } catch { /* 用列表数据兜底 */ }
 }
 
+// 优先用 Clipboard API；非 https 环境退回 textarea + execCommand，两种都失败才提示手动复制。
+// 复制出去的是纯文本带段落标题，方便直接贴到周会记录里
 async function copyDetail() {
   if (!detail.value) return
   const d = detail.value
@@ -310,8 +353,10 @@ async function copyDetail() {
   } catch { ElMessage.warning('复制失败，请手动选择文本复制') }
 }
 
+// resize 监听在卸载时统一摘掉
 function onResize() { isMobile.value = window.innerWidth <= 820 }
 
+// 首屏三件事：人员下拉（筛选用）、概览数字、当前 tab 的列表；人员接口失败不影响后两者
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   try { staff.value = await R.listStaff() } catch { /* ignore */ }

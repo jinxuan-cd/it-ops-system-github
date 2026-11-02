@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/publicApi.js
+ * @description 免登录接口，凭自助入口密钥访问，仅供扫码报障与常见问题使用
+ *
+ * 公众门户接口 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 // 免登录公开接口：员工扫码报障、查询进度、满意度评价、常见问题自助门户
 // 安全措施：入口密钥校验 + 单 IP 频率限制 + 只暴露必要字段（不含内部处理细节与人名）
 const express = require('express')
@@ -15,6 +27,16 @@ const { PORTAL_VERSION } = require('../utils/portalVersion')
 
 // ---- 简易频率限制（内存，重启清零，够用）----
 const HITS = new Map()
+
+/**
+ * 滑动窗口限流：同一个 key 在 windowMs 内最多 max 次。内存实现，重启清零，
+ * 单实例部署够用；多实例部署时每个实例各算各的，会被放大 max 倍。
+ *
+ * @param {string} key 限流维度（动作 + IP）
+ * @param {number} max 窗口内允许次数
+ * @param {number} windowMs 窗口长度，默认 1 小时
+ * @returns {boolean} true=放行，false=超限
+ */
 function rateLimit(key, max = 12, windowMs = 3600 * 1000) {
   const now = Date.now()
   const rec = HITS.get(key) || { n: 0, reset: now + windowMs }
@@ -23,6 +45,13 @@ function rateLimit(key, max = 12, windowMs = 3600 * 1000) {
   HITS.set(key, rec)
   return rec.n <= max
 }
+
+/**
+ * 取客户端 IP 作为限流维度，优先信任反代写入的 X-Forwarded-For 首段。
+ *
+ * @param {import('express').Request} req
+ * @returns {string}
+ */
 function clientIp(req) {
   return ((req.headers['x-forwarded-for'] || req.socket.remoteAddress || '') + '').split(',')[0].trim()
 }
@@ -39,6 +68,11 @@ function nowStr() {
 function onlyDigits(s) { return String(s || '').replace(/\D/g, '') }
 
 // 生成报障单号：R + yyyymmdd + 4 位随机
+/**
+ * 生成对外可念的报障单号，撞号就重试（最多 8 次），极端情况下退回时间戳保证不阻塞提交。
+ *
+ * @returns {Promise<string>}
+ */
 async function nextReportNo() {
   const d = new Date(); const p = n => String(n).padStart(2, '0')
   for (let i = 0; i < 8; i++) {
@@ -50,6 +84,14 @@ async function nextReportNo() {
 }
 
 // 公开配置：前端据此决定页面是否可用
+/**
+ * 门户初始化配置：两个入口是否开放、是否已设置密钥、密钥是否正确、值班联系方式与后端版本号。
+ * 免登录，因此只回布尔值与联系方式，绝不回密钥本身。
+ *
+ * @param {import('express').Request} req query.k 为入口密钥
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/config', asyncHandler(async (req, res) => {
   const ps = await ensurePublicSettings()
   ok(res, {
@@ -65,6 +107,14 @@ router.get('/config', asyncHandler(async (req, res) => {
 }))
 
 // 报障表单可选项（部门 / 应用系统 / 问题类别）
+/**
+ * 报障表单下拉选项：从启用的字典项里按类型分装，前端据此渲染三个下拉框。
+ * 免登录可读（只暴露选项文案，不含内部编码与排序以外的信息）。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res { dept[], app_system[], problem_type[] }
+ * @returns {Promise<void>}
+ */
 router.get('/options', asyncHandler(async (req, res) => {
   const rows = await query(
     'SELECT dict_type, dict_label FROM sys_dict WHERE is_enable = 1 ORDER BY dict_type, sort, dict_id'
@@ -75,6 +125,16 @@ router.get('/options', asyncHandler(async (req, res) => {
 }))
 
 // ---- 报障截图上传（可选）：只收图片，单张 ≤ 8MB，最多 3 张 ----
+/**
+ * 报障截图上传：只收图片、单张 8MB、最多 3 张。
+ * 免登录，因此先校验「入口已开放 + 密钥正确 + 单 IP 每小时 40 次」才交给 multer。
+ * 不用 asyncHandler 包是因为要自己接管 multer 的错误（大小超限要给人话提示）。
+ *
+ * @param {import('express').Request} req query.k 为入口密钥，multipart 字段名 files
+ * @param {import('express').Response} res 返回可直接写进 attachment 的路径数组
+ * @param {Function} next
+ * @returns {void}
+ */
 router.post('/upload', (req, res, next) => {
   ;(async () => {
     const ps = await ensurePublicSettings()
@@ -94,6 +154,16 @@ router.post('/upload', (req, res, next) => {
 })
 
 // ---- 扫码报障提交 ----
+/**
+ * 扫码报障：员工扫码填表提交，直接生成一张待接单工单并通知运维。
+ * 免登录，靠入口密钥 + 单 IP 每小时 12 次限流；内容至少 4 字、必须留姓名。
+ * 口径：user_id 固定写 0（没有系统账号），归属统计要靠 COALESCE(assignee_id, NULLIF(user_id,0))；
+ *      单据状态初始为 pending 并进公海，由运维抢单或服务台派单。
+ *
+ * @param {import('express').Request} req body: k / content / contact / phone / dept / app_system / problem_type / priority / attachment[]
+ * @param {import('express').Response} res { report_no } 报障单号，供后续查询进度
+ * @returns {Promise<void>}
+ */
 router.post('/report', asyncHandler(async (req, res) => {
   const ps = await ensurePublicSettings()
   if (!ps.report_enable) return fail(res, '自助报障入口暂未开放，请联系 IT')
@@ -141,6 +211,16 @@ router.post('/report', asyncHandler(async (req, res) => {
 }))
 
 // ---- 进度查询（单号 + 手机号后 4 位）----
+/**
+ * 报障进度查询：凭单号 + 手机号后 4 位查看状态与处理结果。
+ * 免登录，单 IP 每小时 60 次。
+ * 二次校验：单号可按日期枚举，只要报障时留了手机号就必须核对后 4 位，
+ *          否则任何人都能翻别人的报障内容；只返回处理结果，不返回处理人与内部沟通。
+ *
+ * @param {import('express').Request} req body.report_no / body.phone
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/track', asyncHandler(async (req, res) => {
   if (!rateLimit('track:' + clientIp(req), 60)) return fail(res, '查询过于频繁，请稍后再试')
   const no = String(req.body.report_no || '').trim().toUpperCase()
@@ -178,6 +258,15 @@ router.post('/track', asyncHandler(async (req, res) => {
 }))
 
 // ---- 满意度评价（1-5 星）----
+/**
+ * 满意度评价：1-5 星 + 可选评论，只在工单完成后且未评价过时接受。
+ * 免登录，单 IP 每小时 30 次；留过手机号的同样要核对后 4 位。
+ * 口径：satisfy_score 一旦写入就不再覆盖，避免反复改分把满意度统计刷成失真数据。
+ *
+ * @param {import('express').Request} req body.report_no / score / comment / phone
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/satisfy', asyncHandler(async (req, res) => {
   if (!rateLimit('satisfy:' + clientIp(req), 30)) return fail(res, '操作过于频繁，请稍后再试')
   const no = String(req.body.report_no || '').trim().toUpperCase()
@@ -203,6 +292,15 @@ router.post('/satisfy', asyncHandler(async (req, res) => {
 }))
 
 // ---- 常见问题自助门户（公开知识）----
+/**
+ * 常见问题列表：只出 is_public=1 的条目，按自助门户点击量（faq_hits）倒序，最多 100 条。
+ * 免登录：门户关闭时返回 enable=false；密钥不对时返回 need_key=true 让前端弹输入框，而不是报错。
+ * 列表只给摘要与关键词，正文要进详情页取，减少一次性传输量。
+ *
+ * @param {import('express').Request} req query.k 入口密钥、query.keyword 搜索词
+ * @param {import('express').Response} res { enable, list, total, need_key? }
+ * @returns {Promise<void>}
+ */
 router.get('/faq', asyncHandler(async (req, res) => {
   const ps = await ensurePublicSettings()
   if (!ps.faq_enable) return ok(res, { enable: false, list: [], total: 0 })
@@ -223,6 +321,14 @@ router.get('/faq', asyncHandler(async (req, res) => {
   ok(res, { enable: true, list: rows, total: rows.length })
 }))
 
+/**
+ * 常见问题详情：带正文与附件，并累加 faq_hits 用于衡量「哪条知识真的解决了问题」。
+ * 免登录，必须带正确密钥；只查 is_public=1，未公开的条目一律当作不存在。
+ *
+ * @param {import('express').Request} req req.params.id 为 kb_id，query.k 为入口密钥
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/faq/:id', asyncHandler(async (req, res) => {
   const ps = await ensurePublicSettings()
   if (!ps.faq_enable) return fail(res, '自助门户未开放')

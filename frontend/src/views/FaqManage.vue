@@ -1,8 +1,19 @@
+<!--
+  常见问题管理 —— IT 运维工单台账与日报自动管理系统
+  维护公开到员工自助门户的问答条目
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-11-02　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between" style="margin-bottom:14px">
       <div>
         <h3 class="it-section-title" style="margin:0">常见问题管理（FAQ）</h3>
+        <!-- 重要口径：这里的条目对员工免登录可见，不能写内部系统名、账号、IP、口径敏感的数据 -->
         <div class="tip">这里的条目会直接出现在员工自助门户的「常见问题」页，员工可搜索、展开查看解决方案。</div>
       </div>
       <div>
@@ -11,6 +22,7 @@
       </div>
     </div>
 
+    <!-- 三个数字：公开条目数、门户累计查看、公网门户是否已配置 -->
     <div class="stat-row">
       <div class="stat-item">
         <div class="s-val">{{ rows.length }}</div>
@@ -27,6 +39,7 @@
     </div>
 
     <div class="it-card" style="margin-bottom:14px">
+      <!-- 筛选：系统 / 类别 / 关键词，组合后交给后端过滤 -->
       <el-form :inline="true" :model="filters">
         <el-form-item label="应用系统">
           <el-select v-model="filters.app_system" placeholder="全部" clearable filterable style="width:150px">
@@ -49,6 +62,7 @@
     </div>
 
     <div class="it-card">
+      <!-- 列表只含公开条目；问题列把系统/类别/关键词折成副信息，省掉三列横向空间 -->
       <el-table :data="rows" stripe v-loading="loading" empty-text="还没有公开的常见问题，点右上角「新增问答」开始添加">
         <el-table-column label="问题" min-width="300">
           <template #default="{ row }">
@@ -76,6 +90,7 @@
     </div>
 
     <!-- 新增 / 编辑 -->
+    <!-- 保存即公开（is_public 固定 1），所以按钮文案是「保存并公开」，不是普通保存 -->
     <el-dialog v-model="dialogVisible" :title="form.kb_id ? '编辑问答' : '新增问答'" width="720px" destroy-on-close>
       <el-form :model="form" label-width="90px">
         <el-form-item label="应用系统">
@@ -114,21 +129,30 @@ import R from '../api'
 import { useUserStore } from '../store/user'
 
 const userStore = useUserStore()
+// 审计员只读：新增/编辑/取消公开/删除四个按钮全部按此隐藏
 const canWrite = computed(() => !userStore.isAuditor)
 
+// 列表数据、loading、保存中状态与弹窗显隐
 const rows = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
+// 只用到系统与类别两类字典，做筛选与表单下拉
 const dicts = reactive({ app_system: [], problem_type: [] })
+// 检索条件：空值表示不限
 const filters = reactive({ app_system: '', problem_type: '', keyword: '' })
+// kb_id 为空表示新增；编辑沿用知识库表结构，只是强制公开
 const form = reactive({ kb_id: null, app_system: '', problem_type: '', problem_summary: '', solution: '', keyword: '' })
 
+// 公网门户地址与访问 key，用来拼「打开员工门户」的链接
 const portalBase = ref('')
 const portalKey = ref('')
+// 没配地址时顶部显示「未配置」，同时拦下跳转给出配置指引
 const portalReady = computed(() => !!portalBase.value)
+// 门户累计查看数按当前列表求和，数据源是知识库条目的 faq_hits
 const totalHits = computed(() => rows.value.reduce((s, r) => s + Number(r.faq_hits || 0), 0))
 
+// 字典失败不影响列表：下拉为空时仍可按关键词搜
 async function loadDicts() {
   try {
     const d = await R.getDicts(false)
@@ -137,6 +161,7 @@ async function loadDicts() {
   } catch { /* 字典失败不影响列表 */ }
 }
 
+// 读公开设置拿门户地址与 key；失败静默，页面上显示「未配置」即可
 async function loadPortal() {
   try {
     const c = await R.getPublicSettings()
@@ -145,6 +170,7 @@ async function loadPortal() {
   } catch { /* ignore */ }
 }
 
+// 跳转到门户的常见问题页：地址末尾的斜杠要先去掉，否则会拼出双斜杠
 function openPortal() {
   if (!portalReady.value || !portalKey.value) {
     ElMessage.warning('还没有配置公网门户地址，请到「系统设置 → 自助服务入口」填写')
@@ -153,6 +179,8 @@ function openPortal() {
   window.open(`${portalBase.value.replace(/\/+$/, '')}/faq?k=${portalKey.value}`, '_blank')
 }
 
+// 固定 public=1 只看公开条目——这个页面维护的就是门户内容；
+// 能看全员的人才带 all=1，否则后端只返回本人维护的条目
 async function load() {
   loading.value = true
   try {
@@ -167,16 +195,19 @@ async function load() {
   }
 }
 
+// 清空筛选条件后立即重查
 function resetFilters() {
   Object.assign(filters, { app_system: '', problem_type: '', keyword: '' })
   load()
 }
 
+// 新增前把 kb_id 清空，标题才会显示「新增问答」
 function openAdd() {
   Object.assign(form, { kb_id: null, app_system: '', problem_type: '', problem_summary: '', solution: '', keyword: '' })
   dialogVisible.value = true
 }
 
+// 编辑回填时把 null 归一成空串，否则 el-input 会把 null 显示成字符串
 function openEdit(row) {
   Object.assign(form, {
     kb_id: row.kb_id,
@@ -189,6 +220,8 @@ function openEdit(row) {
   dialogVisible.value = true
 }
 
+// 两个必填在前端先拦一道；is_public 固定为 1，保存后门户立即可见，
+// 所以这里要提醒填写人：内容不能含内部敏感信息
 async function onSave() {
   if (!form.problem_summary.trim()) return ElMessage.warning('请填写问题描述')
   if (!form.solution.trim()) return ElMessage.warning('请填写解决方案')
@@ -214,6 +247,7 @@ async function onSave() {
   }
 }
 
+// 取消公开不删数据：条目仍留在知识库里，只是门户不再展示
 async function unpublish(row) {
   try { await ElMessageBox.confirm('取消公开后，员工门户将看不到这条问答。确认继续？', '取消公开', { type: 'warning' }) } catch { return }
   try {
@@ -223,6 +257,7 @@ async function unpublish(row) {
   } catch (e) { ElMessage.error(e.__message || e.message) }
 }
 
+// 删除不可恢复，和「取消公开」是两件事：删了就再也找不回来
 async function onDelete(row) {
   try { await ElMessageBox.confirm('删除后不可恢复，确认删除这条问答？', '删除', { type: 'warning' }) } catch { return }
   try {
@@ -232,6 +267,7 @@ async function onDelete(row) {
   } catch (e) { ElMessage.error(e.__message || e.message) }
 }
 
+// 字典、门户配置、列表三件事互不依赖，各自失败不影响另外两个
 onMounted(() => { loadDicts(); loadPortal(); load() })
 </script>
 

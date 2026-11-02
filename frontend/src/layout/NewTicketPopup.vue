@@ -1,3 +1,13 @@
+<!--
+  快捷录入弹窗 —— IT 运维工单台账与日报自动管理系统
+  顶栏随时唤起的新建工单窗口
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <!-- 右下角新工单接单提醒：有单自动弹出，可折叠 / 关闭，接取后实时消失 -->
   <transition name="cp">
@@ -50,18 +60,27 @@ import { workflow, loadWorkflow } from '../utils/workflow'
 
 const router = useRouter()
 const userStore = useUserStore()
-const list = ref([])
-const claiming = ref(null)
+// 面板折叠状态：小屏（≤820px）首次出现时自动收起成一条，避免挡住工单列表
 const collapsed = ref(false)
+// 待接单池（抢单模式）或待指派池（服务台模式），接口是同一个
+const list = ref([])
+// 正在接单的 ticket_id，用来只给对应按钮转圈，避免连点重复提交
+const claiming = ref(null)
+// 用户手动关闭：只是本次隐藏，下次来了新单还会重新弹出
 const closed = ref(false)
+// 派单/抢单模式来自全局流转配置，决定标题与按钮文案
 const desk = computed(() => workflow.service_desk_enable)
+// 有紧急/高优先级单时整块变红，让运维一眼看到
 const hasUrgent = computed(() => list.value.some(t => t.priority === 'urgent' || t.priority === 'high'))
+// 审计员 canClaim 为 false，弹窗整体不出现；池子为空时也不占屏幕
 const show = computed(() => !closed.value && userStore.canClaim && list.value.length > 0)
 
+// 优先级字典：后端存英文枚举，展示用中文
 const PRI = { urgent: '紧急', high: '高', normal: '普通', low: '低' }
 function priLabel(p) { return PRI[p] || '普通' }
 function priType(p) { return p === 'urgent' ? 'danger' : p === 'high' ? 'warning' : p === 'low' ? 'info' : 'primary' }
 
+// 首屏只取一次池子：之后的新增/被抢都靠 SSE 增量更新，不必轮询
 async function load() {
   try {
     const rows = await R.poolTickets()
@@ -77,6 +96,7 @@ async function claim(t) {
     await R.claimTicket(t.ticket_id)
     ElMessage.success('接单成功，这张工单由你负责')
     list.value = list.value.filter(x => x.ticket_id !== t.ticket_id)
+    // 通知浮动待办面板刷新「我的处理中工单」
     window.dispatchEvent(new Event('itops:todo-changed'))
   } catch (e) {
     // 被别人抢先：从提醒里移除，并刷新池子
@@ -86,16 +106,19 @@ async function claim(t) {
   } finally { claiming.value = null }
 }
 
+// 跳工单页并带上 open 参数，打开后自动弹详情；action=assign 时服务台直接进派单
 function openDetail(t, action) {
   router.push({ path: '/tickets', query: { open: t.ticket_id, ...(action ? { action } : {}) } })
 }
 function goPool() { router.push({ path: '/tickets', query: { scope: 'pool' } }) }
+// 关闭只在本地隐藏，不记住到下次会话：宁可多提醒一次，也不要漏单
 function dismiss() { closed.value = true }
 
 // 实时事件：新单来了立刻弹出，被别人接走立刻消失
 function onRt(e) {
   const { type, payload } = e.detail || {}
   if (type === 'ticket:new') {
+    // 同一单可能被重复推送（重连补发），先按 ticket_id 去重
     if (!payload || list.value.some(t => t.ticket_id === payload.ticket_id)) return
     list.value = [payload, ...list.value]
     closed.value = false
@@ -104,13 +127,16 @@ function onRt(e) {
     if (!payload) return
     list.value = list.value.filter(t => t.ticket_id !== payload.ticket_id)
   } else if (type === 'ticket:released') {
+    // 退回公海：只知道有单回来了，具体内容得重新拉一次
     load()
   }
 }
 
+// 页面从后台切回：SSE 在手机休眠期间可能已断，补一次全量拉取兜底
 function onVisible() { if (!document.hidden) load() }
 
 onMounted(async () => {
+  // 先拿到流转模式再拉池子，否则标题会先显示「待接取」再跳成「待指派」
   await loadWorkflow()
   load()
   window.addEventListener('itops:rt', onRt)

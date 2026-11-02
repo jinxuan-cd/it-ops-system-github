@@ -1,3 +1,13 @@
+<!--
+  日报填写 —— IT 运维工单台账与日报自动管理系统
+  当日工作填报、AI 代写与历史日报查看
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <h3 class="it-section-title">日报自动生成</h3>
@@ -23,6 +33,8 @@
         </div>
         <div class="block">
           <div class="block-label">明日工作计划（每行一条）：</div>
+          <!-- 一行一条的约定要在提交时生效：后端按换行拆成次日待办，
+               写成一段话只会生成一条超长待办 -->
           <el-input v-model="form.tomorrow_plan" type="textarea" :rows="5" placeholder="多条计划换行填写，提交后自动生成次日待办" />
         </div>
 

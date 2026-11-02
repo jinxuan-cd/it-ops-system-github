@@ -1,3 +1,13 @@
+<!--
+  后台主框架 —— IT 运维工单台账与日报自动管理系统
+  侧边栏导航、顶栏通知与用户菜单、待办抽屉入口
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <el-container class="layout">
     <!-- 桌面端左侧菜单 -->
@@ -15,6 +25,8 @@
           </el-menu-item>
         </template>
       </el-menu>
+      <!-- 版权与版本：跟随菜单滚动到末尾才出现，折叠态隐藏，不占菜单空间 -->
+      <div v-show="!collapsed" class="aside-copy">© 2026 锦轩 · v{{ appVersion }}</div>
     </el-aside>
 
     <!-- 移动端抽屉菜单 -->
@@ -49,13 +61,16 @@
             <Fold v-if="!collapsed" /><Expand v-else />
           </el-icon>
           <span class="sys-name it-hide-mobile">IT 运维工单台账与日报自动管理系统</span>
+          <!-- 手机端空间有限，顶栏改显示当前页名，比重复系统全名有用 -->
           <span v-if="isMobile" class="sys-name-m">{{ pageTitle }}</span>
         </div>
         <div class="header-right">
+          <!-- 快捷新建工单：审计员只读所以不显示；手机端走抽屉菜单，顶栏不塞按钮 -->
           <el-button v-if="!userStore.isAuditor && !isMobile" type="primary" size="small" @click="goQuick">
             <el-icon><Plus /></el-icon> 快速录入
           </el-button>
           <span class="date it-hide-mobile">{{ todayText }}</span>
+          <!-- 用户菜单：角色只做展示，不提供切换，避免误以为可以自降权限 -->
           <el-dropdown @command="onUserCmd">
             <span class="user-box">
               <el-avatar :size="28" class="user-avatar">{{ userStore.realName.charAt(0) }}</el-avatar>
@@ -94,6 +109,9 @@ import NewTicketPopup from './NewTicketPopup.vue'
 import { startRealtime, stopRealtime } from '../utils/realtime'
 import { loadWorkflow } from '../utils/workflow'
 
+// 构建期注入（vite.config.js 的 define），侧边栏底部展示版权与版本
+const appVersion = __APP_VERSION__
+
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
@@ -101,15 +119,20 @@ const userStore = useUserStore()
 const collapsed = ref(false)
 const drawer = ref(false)
 const isMobile = ref(false)
+// 菜单项的 index 就是路由 path，所以当前高亮直接由 route.path 推导，不用额外的菜单状态
 const activeMenu = computed(() => route.path)
+// 只在挂载时算一次：顶栏日期不需要随时间自动跳，刷新页面即可
 const todayText = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 
 // 菜单按业务分组，桌面/移动共用一份配置
+// 角色过滤全部在这里做：viewAll 控制团队数据类页面，admin 控制系统配置类页面，
+// notAuditor 控制所有写操作页面（与路由守卫的 meta 标记严格对应，两边必须一起改）
 const menus = computed(() => {
   const viewAll = userStore.canViewAll
   const admin = userStore.isAdmin
   const notAuditor = !userStore.isAuditor
   const groups = [
+    // 工作台：看板人人可见；团队运营分析只有能看全员数据的人才有意义
     {
       title: '工作台',
       items: [
@@ -117,6 +140,7 @@ const menus = computed(() => {
         ...(viewAll ? [{ path: '/analytics', icon: 'TrendCharts', title: '团队运营分析', m: true }] : [])
       ]
     },
+    // 运维工作：日常录单、处理、巡检、知识沉淀都在这一组
     {
       title: '运维工作',
       items: [
@@ -140,6 +164,7 @@ const menus = computed(() => {
         ] : [])
       ]
     },
+    // 管理与报表：导出、团队查阅、系统配置，按角色逐项叠加
     {
       title: '管理与报表',
       items: [
@@ -156,6 +181,7 @@ const menus = computed(() => {
       ]
     }
   ]
+  // 空分组直接丢掉：普通工程师看不到管理组的管理员项，留着标题会显得菜单断了一截
   return groups.filter(g => g.items.length)
 })
 
@@ -173,11 +199,14 @@ const pageTitle = computed(() => {
   return hit ? hit.title : '运维工单系统'
 })
 
+// 移动端抽屉底部的「系统设置」入口：先关抽屉再跳，否则路由变了抽屉还盖在页面上
 function goSettings() {
   drawer.value = false
   router.push('/settings')
 }
 
+// 断点 820px 与 CSS 里的 @media (max-width: 820px) 必须保持一致，
+// 否则会出现「JS 判定为桌面、样式按移动端排版」的错位
 function checkMobile() {
   isMobile.value = window.innerWidth <= 820
   if (!isMobile.value) drawer.value = false
@@ -187,18 +216,22 @@ onMounted(() => {
   window.addEventListener('resize', checkMobile)
   // 实时消息只在主框架里建一条连接，供接单弹窗 / 待办面板共用
   startRealtime()
+  // 抢单/派单模式影响全站文案，进主框架就先拉一次
   loadWorkflow()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', checkMobile)
+  // 退出登录会卸载主框架，这里必须断开 SSE，否则旧 token 的连接会一直重连
   stopRealtime()
 })
 
+// 快速录入：带上 mode=quick，工单页据此切成紧凑双列排版，一屏就能填完
 function goQuick() {
   router.push('/ticket-create?mode=quick')
 }
 function onUserCmd(cmd) {
   if (cmd === 'logout') {
+    // 先清本地状态再跳，避免守卫看到残留 token 又把用户弹回业务页
     userStore.logout()
     router.replace('/login')
   } else if (cmd === 'settings') {
@@ -214,9 +247,12 @@ function onUserCmd(cmd) {
   transition: width 0.2s;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 纵向 flex：菜单区自己滚动，版权行钉在底部，永远不需要滚到底才看得见 */
+  display: flex;
+  flex-direction: column;
 }
 /* 菜单透明化，由 aside 统一底色，激活项用主题主色，使主题贯穿左侧菜单 */
-.aside :deep(.el-menu) { background: transparent; border-right: none; }
+.aside :deep(.el-menu) { background: transparent; border-right: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .aside :deep(.el-menu-item) { background: transparent; color: #c5cde0; }
 .aside :deep(.el-menu-item:hover) { background: rgba(255, 255, 255, 0.08) !important; color: #fff; }
 .aside :deep(.el-menu-item.is-active) { background: var(--it-primary) !important; color: #fff; }
@@ -224,6 +260,14 @@ function onUserCmd(cmd) {
 .menu-group {
   font-size: 11px; color: rgba(197, 205, 224, 0.5); padding: 14px 20px 6px;
   letter-spacing: 0.5px; white-space: nowrap;
+}
+/* 版权行：比菜单文字更淡，避免在深色侧边栏里抢注意力 */
+.aside-copy {
+  padding: 18px 20px 22px;
+  font-size: 11px;
+  color: rgba(197, 205, 224, 0.4);
+  white-space: nowrap;
+  letter-spacing: 0.2px;
 }
 .logo {
   height: 56px;

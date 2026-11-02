@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/dashboard.js
+ * @description 按今日/本周/本月/上月/本年聚合指标、环比、趋势、类型排名与待办
+ *
+ * 个人看板路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const { query } = require('../db')
@@ -6,6 +18,13 @@ const { auth, isViewAll } = require('../middleware/auth')
 
 router.use(auth)
 
+/**
+ * 普通表（todo / month_goal / project 等）的个人范围条件，只有 user_id 一个维度。
+ * 管理员/审计员带 all=1 时返回空串；注意入参已由内部拼接，不适用于带用户输入的字段。
+ *
+ * @param {import('express').Request} req
+ * @returns {string} 形如 `AND user_id = 3`，无限制时为空串
+ */
 function scope(req) {
   if (isViewAll(req.user.role) && req.query.all === '1') return ''
   return `AND user_id = ${req.user.user_id}`
@@ -13,6 +32,13 @@ function scope(req) {
 
 // 工单口径：自己提的 + 指派/抢单给自己的。
 // 员工扫码报障的单 user_id = 0，若不带上 assignee_id，运维个人看板会漏掉自己处理的单
+/**
+ * 工单专用范围条件：自己提的 + 指派/抢单给自己的，两个维度都要 OR 上。
+ * 只按 user_id 过滤会把「别人报、自己处理」的单漏掉，完成量就永远偏低。
+ *
+ * @param {import('express').Request} req
+ * @returns {{sql: string, params: number[]}}
+ */
 function ticketScope(req) {
   if (isViewAll(req.user.role) && req.query.all === '1') return { sql: '', params: [] }
   const uid = Number(req.user.user_id)
@@ -23,8 +49,19 @@ function pad2(n) { return String(n).padStart(2, '0') }
 function ymOf(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}` }
 
 // 指标卡片 + 今日工单 + 未完成待办 + 目标进度
+/**
+ * 首页主看板：一次返回指标卡、今日工单、今日待办、本月目标、到期项目五块数据。
+ * 权限：登录即可；管理员/审计员带 all=1 时看全公司，否则只看自己（scope / ticketScope）。
+ * 口径：今日/本周/本月受理量按 happen_time，平均处理时长只统计「本月已完成且有完整起止」的单；
+ *      周环比 = 本周 - 上周，月环比 = 本月 - 上月；目标进度 = 已完成目标数 / 目标总数。
+ *
+ * @param {import('express').Request} req query.all=1 时管理员看全员
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const sc = scope(req)
+  // 工单类子查询单独留一个变量：目前与 sc 同源，将来若两类表隔离规则不同可以就地改
   const scT = scope(req, true)
   const cur = `SELECT
       (SELECT COUNT(*) FROM ticket WHERE DATE(happen_time)=CURDATE() ${scT}) AS today_ticket,
@@ -77,6 +114,15 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 扩展数据（故障 / 巡检 / SLA / 满意度 / 指派给我）：单独一个接口，首页按需加载，失败不影响主看板
+/**
+ * 看板扩展块：本月故障、SLA 超期与临期、满意度、今日是否已巡检、指派给我未完成数。
+ * 权限：登录即可；all=1 时故障与工单类指标看全公司，巡检与「指派给我」恒为本人。
+ * 口径：SLA soon 取未来 4 小时内到期且未完成的单，用来提示「快超时了」；满意度不限周期。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/extra', asyncHandler(async (req, res) => {
   const uid = req.user.user_id
   const viewAll = isViewAll(req.user.role) && req.query.all === '1'
@@ -121,6 +167,14 @@ router.get('/extra', asyncHandler(async (req, res) => {
 }))
 
 // 工单趋势（按日）：本周 / 本月
+/**
+ * 简易趋势：本周或本月按天返回受理量，只返回有数据的日期。
+ * 需要连续时间轴请用 /overview 的 trend（那边会补 0 桶），这里是给旧版小组件留的接口。
+ *
+ * @param {import('express').Request} req query.range=month 取本月，否则按本周
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/trend', asyncHandler(async (req, res) => {
   const sc = scope(req)
   const range = req.query.range === 'month' ? 'month' : 'week'
@@ -142,6 +196,14 @@ router.get('/trend', asyncHandler(async (req, res) => {
 }))
 
 // 饼图分布（range: today=当日 / month=本月，默认本月）
+/**
+ * 饼图分布：本期问题类别、应用系统的占比数据。
+ * 口径：按 happen_time 归期，空值不参与分组（否则会出现一个无名扇区）。
+ *
+ * @param {import('express').Request} req query.range=today|month
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/distribution', asyncHandler(async (req, res) => {
   const sc = scope(req)
   const range = req.query.range === 'today' ? 'today' : 'month'
@@ -158,6 +220,17 @@ router.get('/distribution', asyncHandler(async (req, res) => {
 }))
 
 // 汇总分析：上月 + 本年度（个人看板用，管理员带 all=1 则为全公司）
+/**
+ * 汇总分析：上月与本月的月度指标、环比、本年度 12 个月走势、上月问题类别 TOP8。
+ * 权限：登录即可，管理员/审计员带 all=1 看全公司。
+ * 口径：受理量按 happen_time、完成量按 finish_time，跨月的单两边都算，所以「上月×本月」允许出现
+ *      本月完成里含上月受理的单；完成率分母仍是本期受理。年度平均时长按「有数据的月份」取平均，
+ *      空月份不进分母，避免被 0 摊薄。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/summary', asyncHandler(async (req, res) => {
   const sc = ticketScope(req)
   const now = new Date()
@@ -166,6 +239,13 @@ router.get('/summary', asyncHandler(async (req, res) => {
   const year = now.getFullYear()
 
   // 单月指标：受理量按发生时间，完成量按完成时间（与团队分析口径一致）
+  /**
+   * 算单月指标：受理、完成、完成率、平均时长、SLA 超期、满意度。
+   * 两个口径分别查再合并，不能塞进同一条 SQL，否则完成量会被受理时间条件限制住。
+   *
+   * @param {string} ym 形如 2026-10
+   * @returns {Promise<object>}
+   */
   async function monthOf(ym) {
     const rows = await query(
       `SELECT
@@ -203,6 +283,12 @@ router.get('/summary', asyncHandler(async (req, res) => {
   }
 
   // 本年度按月：12 个月全部铺开，没有数据的月份补 0，避免图表跳月
+  /**
+   * 全年 12 个月走势：受理按 happen_time、完成按 finish_time 各自分组后按月份拼回骨架。
+   *
+   * @param {number} y 年份
+   * @returns {Promise<object>} months 长度恒为 12，空月份补 0
+   */
   async function yearOf(y) {
     const rows = await query(
       `SELECT DATE_FORMAT(happen_time, '%m') AS m, COUNT(*) AS c,
@@ -284,12 +370,26 @@ router.get('/summary', asyncHandler(async (req, res) => {
 // =============================================================================
 const DASH_RANGES = ['today', 'week', 'month', 'last_month', 'year']
 
+/**
+ * 把 Date 拼成 MySQL 认的 'YYYY-MM-DD HH:mm:ss'，统一用本地时区（容器已设 Asia/Shanghai）。
+ *
+ * @param {Date} d
+ * @returns {string}
+ */
 function fmtDT(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
     `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
 }
 
 // 计算本期、上期区间，以及趋势分桶粒度
+/**
+ * 算「本期 + 上一周期」的半开区间 [start, end) 与趋势粒度。
+ * 环比一律跟上一个同长度周期比：今日↔昨日、本周↔上周、本月/上月↔再前一个月、本年↔去年；
+ * 粒度跟着周期走：今日按小时、周/月/上月按天、本年按月。
+ *
+ * @param {string} range today|week|month|last_month|year
+ * @returns {{start: Date, end: Date, prevStart: Date, prevEnd: Date, label: string, unit: 'hour'|'day'|'month'}}
+ */
 function dashRange(range) {
   const now = new Date()
   const Y = now.getFullYear(), M = now.getMonth(), D = now.getDate()
@@ -320,6 +420,17 @@ function dashRange(range) {
 }
 
 // 单区间核心指标
+/**
+ * 算一个区间的核心指标，cur/prev 都调它，保证环比两端口径一致。
+ * 口径：受理、待处理、满意度按发生时间落在区间内；完成量、平均时长按完成时间落在区间内；
+ *      done_rate 分母用本区间受理量，跨期完成不会把比率顶过 100%；
+ *      sample 是平均时长的有效样本数（含跨天、完成晚于发生的单），前端据此判断要不要显示均值。
+ *
+ * @param {Date} start 含
+ * @param {Date} end 不含
+ * @param {{sql: string, params: number[]}} sc 数据隔离条件
+ * @returns {Promise<object>}
+ */
 async function periodStat(start, end, sc) {
   const rows = await query(
     `SELECT
@@ -363,6 +474,15 @@ async function periodStat(start, end, sc) {
 }
 
 // 趋势分桶：按小时 / 按天 / 按月
+/**
+ * 铺出该区间的完整桶骨架：今日 24 个整点桶、按月 12 个桶、按天则从 start 逐日走到 end。
+ * 先有骨架再填数，空桶自然补 0，图表不会因为缺数据而「跳日期」。
+ *
+ * @param {Date} start
+ * @param {Date} end 不含
+ * @param {'hour'|'day'|'month'} unit
+ * @returns {Array<{key: string, label: string}>}
+ */
 function bucketKeys(start, end, unit) {
   const list = []
   if (unit === 'hour') {
@@ -383,6 +503,16 @@ function bucketKeys(start, end, unit) {
   return list
 }
 
+/**
+ * 双序列趋势：受理按 happen_time 分桶，完成按 finish_time 分桶，再按骨架合并。
+ * 空桶补 0；落在骨架外的数据（时区错乱的脏时间）直接丢弃，避免出现孤立柱子。
+ *
+ * @param {Date} start
+ * @param {Date} end 不含
+ * @param {'hour'|'day'|'month'} unit
+ * @param {{sql: string, params: number[]}} sc
+ * @returns {Promise<Array<{label:string, accepted:number, done:number, avg_hours:number|null}>>}
+ */
 async function trendOf(start, end, unit, sc) {
   const accExpr = unit === 'hour' ? `HOUR(happen_time)`
     : unit === 'month' ? `DATE_FORMAT(happen_time,'%c')`
@@ -421,6 +551,17 @@ async function trendOf(start, end, unit, sc) {
   })
 }
 
+/**
+ * 整页看板总入口：按 range 一次返回指标、环比、趋势、分布、类别 TOP8、最新工单与右侧待办块。
+ * 权限：登录即可，管理员/审计员带 all=1 看全公司。
+ * 口径：受理按 happen_time、完成按 finish_time；今日按小时分 24 桶，周/月/上月按天，本年按月，
+ *      空桶补 0；环比跟「上一个同长度周期」比（本月↔上月、本年↔去年），日期类给绝对差，
+ *      平均时长给差且两端都有值才算，否则返回 null 让前端显示「—」。
+ *
+ * @param {import('express').Request} req query.range、query.all
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/overview', asyncHandler(async (req, res) => {
   const range = DASH_RANGES.includes(String(req.query.range)) ? String(req.query.range) : 'month'
   const sc = ticketScope(req)

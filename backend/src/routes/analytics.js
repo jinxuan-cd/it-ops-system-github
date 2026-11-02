@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/analytics.js
+ * @description 总览指标、人员维度排名、超期工单滚动分页、数据体检与修复
+ *
+ * 团队运营分析路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 // 团队运营分析（管理员 / 审计员专用）：全公司工单数据的聚合视图
 // 设计原则：
 //   1) 只给「聚合 + 排名」，明细工单通过下钻接口按需查看（避免一屏堆几百条明细，也符合最小必要原则）
@@ -25,6 +37,15 @@ const RANGE_META = {
 const OWNER = 'COALESCE(assignee_id, NULLIF(user_id, 0))'
 
 // 生成时间条件（which: cur=本期 / prev=上一期）
+/**
+ * 生成周期过滤条件，cur/prev 共用同一套写法，保证「环比」两端口径完全对齐。
+ * 周按 YEARWEEK(...,1)（周一起算），月按 YYYY-MM 字符串比较，跨年也不会错位。
+ *
+ * @param {string} field 时间字段名，可带表别名前缀
+ * @param {string} range today|week|month|last_month|year
+ * @param {'cur'|'prev'} which cur=本期，prev=上一个同长度周期（今日↔昨日、本月↔上月、本年↔去年）
+ * @returns {string} 可直接拼进 WHERE 的 SQL 片段
+ */
 function cond(field, range, which = 'cur') {
   const prev = which === 'prev'
   switch (range) {
@@ -43,6 +64,15 @@ function cond(field, range, which = 'cur') {
 }
 
 // 本期核心指标
+/**
+ * 算一个周期的核心指标：受理量、完成量、完成率、平均时长、活跃人数。
+ * 口径：受理量按 happen_time、完成量按 finish_time，两者互不换算；
+ *      完成率分母用「本期受理」，而不是「本期完成」，否则跨期完成会把比率顶过 100%。
+ *
+ * @param {string} range today|week|month|last_month|year
+ * @param {'cur'|'prev'} which
+ * @returns {Promise<{accepted:number, done:number, closed_in_period:number, avg_hours:number|null, active_users:number, done_rate:number}>}
+ */
 async function metricsOf(range, which) {
   const rows = await query(
     `SELECT
@@ -74,6 +104,12 @@ async function metricsOf(range, which) {
 }
 
 // 当前积压（不随周期变化）：未完成工单，及其中超过 24h / 72h 未闭环的
+/**
+ * 算「此刻」的积压，不带周期条件 —— 积压是时点量不是区间量，跟着周期变会让人误读。
+ * 24h / 72h 均以 happen_time 为起点算到 NOW()。
+ *
+ * @returns {Promise<{backlog:number, over24:number, over72:number}>}
+ */
 async function backlogOf() {
   const rows = await query(
     `SELECT
@@ -95,6 +131,13 @@ async function backlogOf() {
 function pad(n) { return String(n).padStart(2, '0') }
 function fmtDate(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
 
+/**
+ * 铺出该周期的完整时间轴，作为趋势图的骨架：
+ * 今日 24 个小时桶、本周 7 天、本月/上月按当月天数、本年 12 个月。
+ *
+ * @param {string} range
+ * @returns {string[]} 有序的桶 key（HH / YYYY-MM-DD / YYYY-MM）
+ */
 function bucketsOf(range) {
   const now = new Date()
   const out = []
@@ -121,6 +164,13 @@ function bucketsOf(range) {
   return out
 }
 
+/**
+ * 双序列趋势：受理序列按 happen_time 分桶，完成序列按 finish_time 分桶。
+ * 空桶补 0：图表要连续，缺数据的时段也要占位，否则折线会把两段不相邻的时间连起来。
+ *
+ * @param {string} range
+ * @returns {Promise<Array<{key:string, accepted:number, done:number}>>}
+ */
 async function trendOf(range) {
   let bucket, whereCur, doneWhere
   if (range === 'today') {
@@ -154,6 +204,14 @@ async function trendOf(range) {
 }
 
 // 人员产能排名：本期完成量 / 受理量 / 当前积压 / 平均时长 / 知识沉淀
+/**
+ * 人员产能榜：以启用账号为主表左连四个子查询，保证「零工单的人」也出现在榜上。
+ * 归属口径统一用 OWNER（见文件顶部常量）：已指派算处理人，未指派算提单人，
+ * 扫码报障单 user_id=0 也能归到实际处理的运维名下；积压则是不带周期的时点量。
+ *
+ * @param {string} range
+ * @returns {Promise<Array<object>>} 按完成量、受理量倒序
+ */
 async function userRankOf(range) {
   const rows = await query(
     `SELECT u.user_id, u.username, u.real_name, u.role,
@@ -197,6 +255,16 @@ async function userRankOf(range) {
 }
 
 // 维度排名（问题类别 / 应用系统 / 部门），带占比与累计占比，用于帕累托分析
+/**
+ * 单维度排行（问题类别 / 应用系统 / 部门），占比按「该维度有值的工单」为分母，
+ * 不是全表总量 —— 没填类别的工单不进分母，否则占比永远凑不到 100%。
+ * 累计占比按全部类别算，列表只返回前 limit 条，kinds 给出类别总数。
+ *
+ * @param {string} field 维度字段名
+ * @param {string} range
+ * @param {number} limit 返回条数上限
+ * @returns {Promise<{list:Array<object>, total:number, kinds:number}>}
+ */
 async function rankOf(field, range, limit = 10) {
   const rows = await query(
     `SELECT ${field} AS name, COUNT(*) AS value,
@@ -226,6 +294,11 @@ async function rankOf(field, range, limit = 10) {
 }
 
 // 近 6 个月趋势（月度复盘用）
+/**
+ * 近 6 个自然月（含本月）的月度走势，起点取 5 个月前的 1 号，跨年也不会缺月。
+ *
+ * @returns {Promise<Array<{month:string, accepted:number, done:number}>>}
+ */
 async function monthlyTrendOf() {
   const rows = await query(
     `SELECT DATE_FORMAT(happen_time, '%Y-%m') AS m,
@@ -240,6 +313,13 @@ async function monthlyTrendOf() {
 
 // 超期未闭环工单（重点标记对象）
 // 注意：age_hours 用 GREATEST(...,0) 兜底，出现「已挂 -7h」这类负值一定是服务器时区不一致，不允许直接展示
+/**
+ * 全量超期未闭环列表（取最早的 limit 条），overview 首页只用前 10 条。
+ * 排序按 happen_time 正序：挂得最久的排最前，才是真正的重点标记对象。
+ *
+ * @param {number} limit
+ * @returns {Promise<Array<object>>}
+ */
 async function overdueOf(limit = 20) {
   const rows = await query(
     `SELECT t.ticket_id, t.user_id, u.real_name, t.happen_time, t.dept, t.app_system,
@@ -258,6 +338,16 @@ async function overdueOf(limit = 20) {
 }
 
 // 超期未闭环工单：分页取（首页只给 10 条，避免积压一多把整页拉长）
+/**
+ * 超期未闭环工单分页，前端「滚动加载」每滚到底部再来要一页，所以接口必须带 total 与页码。
+ * 口径：status <> 'done' 且 happen_time 有值；age 由 TIMESTAMPDIFF 现算，不落库，避免数据过期。
+ * 传 userId 时只看该员工名下（人员维度用），否则看全团队。
+ *
+ * @param {number|string} page 页码，从 1 开始
+ * @param {number|string} size 每页条数，上限 50
+ * @param {number} userId 0 表示不限人员
+ * @returns {Promise<{list:Array<object>, total:number, page:number, size:number}>}
+ */
 async function overduePage(page = 1, size = 10, userId = 0) {
   const p = Math.max(1, Number(page) || 1)
   const s = Math.min(50, Math.max(1, Number(size) || 10))
@@ -289,6 +379,13 @@ async function overduePage(page = 1, size = 10, userId = 0) {
 }
 
 // 知识沉淀（团队视角）
+/**
+ * 知识库三项总量：累计条数（全量）、本期新增（按 create_time）、被查看过的条数。
+ * 口径：kb_total 与周期无关，kb_new 才随所选周期变化。
+ *
+ * @param {string} range
+ * @returns {Promise<{kb_total:number, kb_new:number, kb_used:number}>}
+ */
 async function knowledgeStat(range) {
   const rows = await query(
     `SELECT
@@ -302,6 +399,14 @@ async function knowledgeStat(range) {
 }
 
 // SLA 时效达成情况（响应达成率 / 解决达成率 / 当前超出时限数）
+/**
+ * SLA 达成率：响应看 respond_time 是否早于 sla_respond_due，解决看 finish_time 是否早于 sla_resolve_due。
+ * 分母只算「有对应记录的单」——历史导入数据没有接单时间，算进分母会把达成率无端拉低。
+ * overdue_now 是时点量（当前已超解决时限且未完成），不受周期限制。
+ *
+ * @param {string} range
+ * @returns {Promise<object>} 达成率无样本时返回 null，前端显示「—」而不是 0%
+ */
 async function slaOf(range) {
   const rows = await query(
     `SELECT
@@ -331,6 +436,12 @@ async function slaOf(range) {
 }
 
 // 满意度（只有报障人评价过才有数据）
+/**
+ * 满意度：按 finish_time 归期（干完的活才谈得上评价），4 分及以上算好评、2 分及以下算差评。
+ *
+ * @param {string} range
+ * @returns {Promise<{score:number, count:number, good_rate:number, bad:number}>}
+ */
 async function satisfyOf(range) {
   const rows = await query(
     `SELECT ROUND(AVG(satisfy_score), 2) AS avg_score, COUNT(*) AS cnt,
@@ -348,6 +459,13 @@ async function satisfyOf(range) {
 }
 
 // 故障（事件）统计：没有记录时 total=0，前端据此整块隐藏
+/**
+ * 故障事件统计：按 start_time 归期，P1/P2 算严重故障，响应时长取 start→accept。
+ * 平均时长排除 finish_time 早于 start_time 的脏数据，否则平均值会被拉负。
+ *
+ * @param {string} range
+ * @returns {Promise<object>}
+ */
 async function incidentOf(range) {
   const rows = await query(
     `SELECT COUNT(*) AS total, SUM(status = 'ongoing') AS ongoing,
@@ -373,6 +491,17 @@ async function incidentOf(range) {
 }
 
 // 总览：一次返回看板所需的全部聚合数据
+/**
+ * 团队分析总览：14 个聚合查询并发跑，一次返回看板全部数据块。
+ * 权限：管理员 / 审计员（router.use 已统一拦截）。
+ * 环比口径：跟「上一个同长度周期」比 —— 今日↔昨日、本周↔上周、本月↔上月、本年↔去年，
+ *          日期类给绝对差，平均时长给差并保留 1 位小数；积压与未完成数不带环比（时点量）。
+ * 人均产能 = 本期完成量 / 本期活跃人数（active_users），不是部门总人数。
+ *
+ * @param {import('express').Request} req query.range 取 today|week|month|last_month|year，非法值回落 month
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/overview', asyncHandler(async (req, res) => {
   const range = RANGE_META[req.query.range] ? req.query.range : 'month'
   const [cur, prev, backlog, trend, userRank, problemRank, appRank, deptRank, monthlyTrend, od, kb, sla, satisfy, incident] = await Promise.all([
@@ -425,6 +554,15 @@ router.get('/overview', asyncHandler(async (req, res) => {
 }))
 
 // 下钻：某人本期工单明细（只读）
+/**
+ * 下钻明细：某员工本期的工单列表，最多 200 条。
+ * 口径：受理在本期的 或 本期完成的都算（并集），否则「上月报的本月做完」会被漏掉。
+ * 注意：这里按 user_id（提单人）过滤，与榜单的 OWNER 口径不同，仅作追溯用。
+ *
+ * @param {import('express').Request} req query.user_id、query.range
+ * @param {import('express').Response} res user_id 为空时返回空数组
+ * @returns {Promise<void>}
+ */
 router.get('/user-tickets', asyncHandler(async (req, res) => {
   const userId = Number(req.query.user_id)
   if (!userId) return ok(res, [])
@@ -444,12 +582,29 @@ router.get('/user-tickets', asyncHandler(async (req, res) => {
 }))
 
 // 超期未闭环工单：分页接口（团队分析右侧列表，积压再多也只占一屏）
+/**
+ * 超期未闭环工单分页接口：供前端滚动加载翻页，size 上限 50，避免一页拉太多。
+ *
+ * @param {import('express').Request} req query.page / query.size / query.user_id（0 或空为全团队）
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/overdue', asyncHandler(async (req, res) => {
   const data = await overduePage(req.query.page, req.query.size, Number(req.query.user_id) || 0)
   ok(res, data)
 }))
 
 // 人员维度分析：选定一个员工，只看他自己的工单情况
+/**
+ * 人员画像：单人的指标、趋势、问题/系统分布与最近 10 条工单。
+ * 权限：管理员 / 审计员。
+ * 口径：受理、问题类别、系统分布按 happen_time；完成量、平均时长、满意度按 finish_time；
+ *      积压与 SLA 超期是时点量，不带周期；11 个查询并发，减少页面等待。
+ *
+ * @param {import('express').Request} req query.user_id（必填）、query.range
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/person', asyncHandler(async (req, res) => {
   const userId = Number(req.query.user_id)
   if (!userId) return fail(res, '请先选择员工')
@@ -554,6 +709,13 @@ router.get('/person', asyncHandler(async (req, res) => {
 }))
 
 // 数据体检：找出会影响统计口径的异常数据（只读）
+/**
+ * 数据体检：统计会污染统计口径的几类脏数据条数与缺失字段数。
+ * issues 只汇总前三类「时间矛盾」问题，因为它们是真正会让时长/完成率失真的，
+ * 缺失类别/系统/部门只影响维度占比，单列不参与 issues。
+ *
+ * @returns {Promise<object>}
+ */
 async function healthOf() {
   const rows = await query(
     `SELECT
@@ -572,11 +734,26 @@ async function healthOf() {
   return o
 }
 
+/**
+ * 数据体检接口：只读，返回各类异常计数，前端按 issues 决定是否显示「去修复」按钮。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/data-health', asyncHandler(async (req, res) => {
   ok(res, await healthOf())
 }))
 
 // 一键修复（只修口径类的确定性问题，不改业务语义）
+/**
+ * 一键修复时间矛盾：完成早于发生的按发生时间对齐，已完成却缺完成时间的用发生时间/当前时间补。
+ * 权限：管理员 / 审计员。返回修复条数与修复后的体检结果，便于立刻复检。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res { fixed, health }
+ * @returns {Promise<void>}
+ */
 router.post('/data-repair', asyncHandler(async (req, res) => {
   const a = await query(
     `UPDATE ticket SET finish_time = happen_time

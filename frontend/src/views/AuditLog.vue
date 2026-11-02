@@ -1,3 +1,13 @@
+<!--
+  操作审计 —— IT 运维工单台账与日报自动管理系统
+  操作日志检索与行为汇总查看
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -11,6 +21,8 @@
     </div>
 
     <el-row v-if="summary.top.length" :gutter="14" class="card-row">
+      <!-- 近 30 天高频操作是固定窗口，不跟下面的时间筛选联动：
+           它的作用是提示「最近主要在改什么」，翻历史区间时这个提示仍然有效 -->
       <el-col :span="24">
         <div class="it-card">
           <div class="top-wrap">
@@ -34,6 +46,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="方式">
+          <!-- 界面上写「新增/修改/删除」，实际按 HTTP method 过滤（POST/PUT/DELETE） -->
           <el-select v-model="filters.method" placeholder="全部" clearable style="width:100px">
             <el-option label="新增" value="POST" />
             <el-option label="修改" value="PUT" />
@@ -68,6 +81,7 @@
         </el-table-column>
         <el-table-column prop="ip" label="IP" width="130" />
         <el-table-column label="结果" width="80">
+          <!-- 以 HTTP 状态码 < 400 判成功：即使是业务异常，只要接口返回 4xx/5xx 就标红 -->
           <template #default="{ row }">
             <el-tag size="small" :type="row.status_code < 400 ? 'success' : 'danger'">{{ row.status_code }}</el-tag>
           </template>
@@ -84,12 +98,17 @@ import { ElMessage } from 'element-plus'
 import R from '../api'
 
 const rows = ref([])
+// 操作人候选（带各自条数），下拉里直接显示「账号（次数）」，方便按人回溯
 const users = ref([])
 const loading = ref(false)
+// 日期区间：空数组表示不限时间；只有选满两天才会下发 start/end
 const range = ref([])
 const filters = reactive({ username: '', method: '', keyword: '' })
+// 顶部汇总：总条数、近 30 天高频操作、按天分布
 const summary = reactive({ total: 0, top: [], daily: [] })
 
+// 组装查询参数：limit 固定 500，审计页只做「最近记录检索」，不做全量导出与分页；
+// 日期区间必须选满两端才下发，只选一头视为不限时间
 function params() {
   const p = { limit: 500 }
   if (range.value && range.value.length === 2) { p.start = range.value[0]; p.end = range.value[1] }
@@ -97,6 +116,7 @@ function params() {
   return p
 }
 
+// 每次查询都整体重取当前筛选下的最近 500 条，前端不做本地二次过滤
 async function load() {
   loading.value = true
   try {
@@ -104,12 +124,14 @@ async function load() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 重置要连日期区间一起清，只清下拉会留下上一次的时间窗口
 function resetFilters() {
   range.value = []
   Object.assign(filters, { username: '', method: '', keyword: '' })
   load()
 }
 
+// 列表先出（主内容），汇总与操作人候选后补：后两者失败只影响顶部提示与下拉，不影响检索
 onMounted(async () => {
   load()
   try {

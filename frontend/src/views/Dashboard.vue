@@ -1,3 +1,13 @@
+<!--
+  个人看板 —— IT 运维工单台账与日报自动管理系统
+  按今日/本周/本月/上月/本年切换整页指标、趋势、类型排名与待办
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <!-- 顶部：时间维度切换（整页跟着变） -->
@@ -27,6 +37,8 @@
     </div>
 
     <!-- 指标卡片（本期口径，环比为与上一同长度周期的对比） -->
+    <!-- 环比基数是「等长的上一周期」：本周比上周、本月比上月、本年比去年整年，
+         由后端按 range 算好一起返回，前端不做二次换算，避免跨维度比较失真 -->
     <el-row :gutter="14" class="card-row" v-loading="loading">
       <el-col :xs="12" :sm="8" :md="4">
         <div class="metric-card blue" :title="`较上一周期 ${diffText(ov.diff.accepted)} 单`">
@@ -82,6 +94,8 @@
             <h4 class="it-section-title" style="margin:0">{{ ov.range_label }}工单趋势</h4>
             <span class="mini-note">柱：受理 / 完成 · {{ unitText }} · 悬停看平均时长</span>
           </div>
+          <!-- 趋势图只有一个 Y 轴（单量）。平均处理时长量纲不同，塞进第二根轴会让两条线的
+               相对高低产生误读，所以只放在 tooltip 里；分桶粒度由后端 unit 决定 -->
           <div ref="trendChart" class="chart"></div>
         </div>
       </el-col>
@@ -92,6 +106,8 @@
             <span class="mini-note" v-if="ov.typeRank.length">共 {{ ov.typeRank.length }} 类</span>
           </div>
           <div v-if="!ov.typeRank.length" class="empty">{{ ov.range_label }}没有工单数据</div>
+          <!-- 只有排名柱状图：原先的帕累托图（柱 + 累计占比折线）已删除，
+               这里只回答「哪几类问题最多」，不再表达二八分布 -->
           <div v-show="ov.typeRank.length" ref="typeChart" class="chart"></div>
         </div>
       </el-col>
@@ -123,6 +139,7 @@
             <h4 class="it-section-title" style="margin:0">{{ ov.range_label }}最新工单</h4>
             <el-button text type="primary" size="small" @click="router.push('/tickets')">查看全部</el-button>
           </div>
+          <!-- 「最新工单」跟随顶部时间维度，取的是该周期内最近发生的几条，不是全局最新 -->
           <el-table :data="ov.recent" size="small" empty-text="暂无工单">
             <el-table-column prop="happen_time" label="时间" width="150" />
             <el-table-column prop="dept" label="部门" width="100" show-overflow-tooltip />
@@ -139,6 +156,8 @@
           <h4 class="it-section-title">今日待办</h4>
           <div v-if="!ov.pendingTodos.length" class="empty">暂无未完成待办</div>
           <div v-for="t in ov.pendingTodos" :key="t.todo_id" class="todo-line">{{ t.todo_title }}</div>
+          <!-- 本月目标固定按自然月统计，不跟随顶部时间维度：目标是按月设定的，
+               切到「今日」「本年」时这一块的口径都不变，否则完成率会失去意义 -->
           <div class="goal-block">
             <div class="it-between">
               <h4 class="it-section-title" style="margin:0">本月目标进度</h4>
@@ -184,15 +203,21 @@ const router = useRouter()
 const userStore = useUserStore()
 
 const loading = ref(false)
+// 顶部时间维度：today / week / month / last_month / year，一改就整页重取（后端按此算好所有口径）
 const range = ref('month')
+// 到期未完成项目提醒条是否展示：用户点关闭后写 localStorage，下次进来保持
 const showDueAlert = ref(localStorage.getItem('itops_show_due') !== '0')
 
+// 四个图表容器。除趋势图外都用 v-show 控制显隐，隐藏时容器宽高为 0，
+// 所以统一走 chartOf 复用实例，容器重新显示后要再 resize 一次才有正确尺寸
 const trendChart = ref(null)
 const typeChart = ref(null)
 const pieType = ref(null)
 const pieApp = ref(null)
 
 // 整页数据：切换时间维度时整体替换
+// 指标 / 上一周期 / 趋势 / 分布 / 类型排名 / 最近工单 / 待办 / 月度目标 / 到期项目
+// 全在这一个对象里，一次 Object.assign 覆盖，避免切换维度时各区块数据不同步
 const ov = reactive({
   range: 'month',
   range_label: '本月',
@@ -216,7 +241,9 @@ const ov = reactive({
 })
 const m = computed(() => ov.metrics)
 
+// 趋势图 X 轴粒度文案：后端只回 unit 枚举（hour/day/month），中文映射放前端
 const unitText = computed(() => (ov.unit === 'hour' ? '按小时' : ov.unit === 'month' ? '按月' : '按天'))
+// 月度目标完成率按「已完成条数 / 总条数」取整，不区分目标权重
 const goalTotal = computed(() => ov.monthGoals.length)
 const goalDone = computed(() => ov.monthGoals.filter(g => g.is_finish).length)
 const goalProgress = computed(() => (goalTotal.value ? Math.round(goalDone.value / goalTotal.value * 100) : 0))
@@ -229,6 +256,8 @@ const extra = reactive({
   inspection_today: true,
   assigned_to_me: 0
 })
+// 把扩展指标装配成提醒条：值为 0 的项直接不出现，避免一排「0」占地方；
+// 巡检项对审计员隐藏，因为审计员本来就不参与机房巡检
 const extras = computed(() => {
   const list = []
   if (extra.assigned_to_me > 0) {
@@ -252,23 +281,29 @@ const extras = computed(() => {
   return list
 })
 
+// 扩展指标单独取一次：SLA 超期、指派给我、故障、今日巡检。
+// 和主看板接口解耦，失败时静默降级，不让整页因为附属信息报错
 async function loadExtra() {
   try {
     Object.assign(extra, await R.getDashboardExtra(userStore.canViewAll ? { all: 1 } : {}))
   } catch { /* 扩展数据失败不影响主看板 */ }
 }
 
+// 环比差值文案：正数补 + 号，负数自带 -，0 显式写 0
 function diffText(d) {
   if (d > 0) return '+' + d
   if (d < 0) return '' + d
   return '0'
 }
 
+// 状态枚举转中文：pending 是「待接单」（还没人认领），不是「待处理」
 function statusText(s) {
   return s === 'done' ? '完成' : s === 'pending' ? '待接单' : '处理中'
 }
 
 // 切换时间维度：整页重新取数并重绘
+// range 是传给后端的参数，不是前端过滤：指标、趋势分桶（本月按天、本年按月）、
+// 类型排名、最近工单、待办都由后端按同一区间算好，保证各区块口径一致
 async function reload() {
   loading.value = true
   try {
@@ -276,6 +311,7 @@ async function reload() {
     const data = await R.getDashboardOverview(params)
     Object.assign(ov, data)
     loadExtra()
+    // 等数据驱动 DOM 刷新落定（图表容器的 v-show 切换完）再绘制，否则拿到的是隐藏容器
     await nextTick()
     drawTrend()
     drawTypeRank()
@@ -287,11 +323,15 @@ async function reload() {
   }
 }
 
+// 复用同一 DOM 上的 ECharts 实例：重复 init 会报「已有实例」并叠加 canvas，
+// 所以先 getInstanceByDom，没有再 init
 function chartOf(el) {
   if (!el) return null
   return echarts.getInstanceByDom(el) || echarts.init(el)
 }
 
+// 趋势图：受理 / 完成双柱，共用一根单量 Y 轴。
+// 平均处理时长量纲不同，只在 tooltip 里给出，不加第二根轴；点位超过 16 个时 X 轴标签交给 ECharts 抽稀
 function drawTrend() {
   const c = chartOf(trendChart.value)
   if (!c) return
@@ -324,6 +364,8 @@ function drawTrend() {
   }, true)
 }
 
+// 类别排名：横向条形图。先按数值升序排，ECharts 类目轴是自下而上，
+// 视觉上最大值落在顶部，读起来仍是「TOP 榜」。帕累托图已删除，这里不再表达累计占比
 function drawTypeRank() {
   const c = chartOf(typeChart.value)
   if (!c) return
@@ -350,6 +392,8 @@ function drawTypeRank() {
   }, true)
 }
 
+// 两个饼图（问题类别 / 应用系统）共用同一份 option 骨架，只换数据源，
+// 这样左右两块的半径、图例、标签排版才不会跑偏
 function drawDistribution() {
   const opt = data => ({
     tooltip: { trigger: 'item', formatter: '{b}：{c} 单 ({d}%)' },
@@ -369,6 +413,7 @@ function drawDistribution() {
   if (b) b.setOption(opt(ov.distribution.appSystem), true)
 }
 
+// 窗口尺寸变化时重算：只 resize 已 init 的实例，不给还没画的容器主动 init
 function resize() {
   ;[trendChart.value, typeChart.value, pieType.value, pieApp.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
@@ -378,12 +423,14 @@ function resize() {
 
 function goProjects() { router.push('/projects') }
 
+// 进场先取一次全量，之后靠全局事件驱动刷新（不做轮询）
 onMounted(async () => {
   window.addEventListener('resize', resize)
   await reload()
   // 待办 / 月度目标变更后同步刷新
   window.addEventListener('itops:todo-changed', reload)
 })
+// 卸载必须 dispose 图表实例，否则路由来回切会一直泄漏 canvas 与 resize 监听
 onBeforeUnmount(() => {
   ;[trendChart.value, typeChart.value, pieType.value, pieApp.value].forEach(el => {
     const c = el && echarts.getInstanceByDom(el)
@@ -429,6 +476,9 @@ onBeforeUnmount(() => {
 .metric-card .m-val small { font-size: 13px; font-weight: 400; opacity: 0.9; }
 .metric-card .m-label { font-size: 12px; opacity: 0.92; margin-top: 4px; }
 .metric-card .m-label .sub { font-size: 11px; opacity: 0.85; }
+/* 踩坑：指标卡的渐变类必须带 .metric-card 前缀。
+   早期写成全局 .orange / .blue，会把 .extra-item.orange 等其它组件的底色一起改掉，
+   表现为提醒条整块变成渐变色块 */
 .metric-card.blue { background: linear-gradient(135deg,#2f6fed,#5b8def); }
 .metric-card.green { background: linear-gradient(135deg,#18a058,#36c47e); }
 .metric-card.orange { background: linear-gradient(135deg,#f0a020,#f7b84b); }

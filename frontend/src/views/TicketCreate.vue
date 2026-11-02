@@ -1,7 +1,18 @@
+<!--
+  工单录入 —— IT 运维工单台账与日报自动管理系统
+  录入工单，部门/系统/类别支持可选可写并校验基础字典，可粘贴故障截图
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between" style="margin-bottom: 14px">
       <h3 class="it-section-title" style="margin:0">工单录入</h3>
+      <!-- 标准录入带状态、处理说明、附件与知识库推荐；快捷录入只留必填项，用于现场快速补录 -->
       <el-radio-group v-model="mode" size="small">
         <el-radio-button value="standard">标准录入</el-radio-button>
         <el-radio-button value="quick">快捷录入</el-radio-button>
@@ -12,6 +23,7 @@
       <!-- 表单区（支持 Ctrl+V 直接粘贴截图为附件） -->
       <div class="it-card form-area" @paste="onPaste">
         <el-form :model="form" label-width="92px" label-position="right">
+          <!-- 部门 / 应用系统 / 问题类别是「可选可写」：不必先展开下拉，能直接打字，但值必须命中基础字典 -->
           <el-row :gutter="16">
             <el-col :span="mode === 'quick' ? 12 : 24">
               <el-form-item label="发生时间" required>
@@ -50,6 +62,7 @@
             <el-input v-model="form.service_content" type="textarea" :rows="3" placeholder="运维服务内容描述" />
           </el-form-item>
 
+          <!-- 以下字段只在标准录入出现：完成时间、处理状态、处理说明与附件 -->
           <template v-if="mode === 'standard'">
             <el-row :gutter="16">
               <el-col :span="12">
@@ -119,6 +132,7 @@
           选择「应用系统 + 问题类别」或在左侧填写「服务内容」后，将自动匹配历史处理方式与知识库方案
         </div>
 
+        <!-- 历史处理方式：取自已完成的同类工单，点一下即可把当时的做法回填到处理说明 -->
         <div v-if="historyList.length" class="kb-group">
           <div class="kb-group-title"><el-icon><Clock /></el-icon> 历史处理方式（来自已完成工单）</div>
           <div v-for="h in historyList" :key="'h'+h.ticket_id" class="kb-item">
@@ -133,6 +147,7 @@
           </div>
         </div>
 
+        <!-- 知识库方案：人工沉淀或 AI 整理出的标准解法，与历史工单互为补充 -->
         <div v-if="knowledgeList.length" class="kb-group">
           <div class="kb-group-title"><el-icon><Reading /></el-icon> 知识库方案</div>
           <div v-for="k in knowledgeList" :key="'k'+k.kb_id" class="kb-item">
@@ -159,17 +174,25 @@ import { ElMessage } from 'element-plus'
 import R from '../api'
 
 const route = useRoute()
+// 入口可带 ?mode=quick 直接进快捷录入，其余情况一律进标准录入
 const mode = ref(route.query.mode === 'quick' ? 'quick' : 'standard')
+// 基础字典候选值（只含启用项）：下拉选项与 guardDict 校验都以这份数据为准
 const dicts = reactive({ dept: [], app_system: [], problem_type: [] })
+// 推荐结果分两路存：知识库方案与历史工单处理方式，各自渲染、互不覆盖
 const knowledgeList = ref([])
 const historyList = ref([])
+// 关键词兜底检索框：留空时自动拿「服务内容」参与匹配
 const kw = ref('')
+// 提交中置灰按钮，避免手快点出两条重复工单
 const submitting = ref(false)
 
+// 附件上传地址与请求头：el-upload 不走 axios 拦截器，token 必须在这里手写
 const uploadUrl = '/api/tickets/upload'
 const uploadHeaders = { Authorization: `Bearer ${localStorage.getItem('itops_token')}` }
+// 已上传文件列表，仅用于界面回显；真正提交的数据在 form.attachment
 const fileList = ref([])
 
+// 一张工单的全部录入字段；attachment 存后端返回的 url 数组，不是 File 对象
 const form = reactive({
   happen_time: '',
   contact: '',
@@ -185,12 +208,14 @@ const form = reactive({
   attachment: []
 })
 
+// 推荐接口按 400ms 防抖：边打字边请求会把后端打满，也容易出现结果乱序
 let timer = null
 function debounceRecommend() {
   clearTimeout(timer)
   timer = setTimeout(fetchRecommend, 400)
 }
 
+// 拉基础字典（只取启用项）；失败不阻断录入，没有候选值时校验会自动跳过
 async function fetchDicts() {
   try {
     const data = await R.getDicts(false)
@@ -200,6 +225,7 @@ async function fetchDicts() {
   } catch (e) { /* 字典加载失败不阻断录入 */ }
 }
 
+// 按「系统 + 类别 + 关键词」拉历史工单与知识库推荐，三者全空时清空列表并不再请求
 async function fetchRecommend() {
   // 关键字未填时，自动用「服务内容」参与匹配
   const keyword = kw.value || form.service_content.trim()
@@ -216,6 +242,7 @@ async function fetchRecommend() {
     historyList.value = data.history || []
   } catch (e) { /* 静默，避免录入干扰 */ }
 }
+// 选中系统或类别后立即重算推荐，不用用户再点一次搜索
 function onPick() { fetchRecommend() }
 
 // ---------------------------------------------------------------------------
@@ -225,10 +252,13 @@ function onPick() { fetchRecommend() }
 // ---------------------------------------------------------------------------
 const DICT_NAME = { dept: '部门', app_system: '应用系统', problem_type: '问题类别' }
 
+// 严格按标签文本全等比对；归一化只用于下一步「纠偏」，不参与命中判断
 function dictHas(field, v) {
   return (dicts[field] || []).some(d => d.dict_label === v)
 }
 
+// 录入时的守门人：命中字典就直接用；只是空格/大小写不一致就按字典纠正回填；
+// 完全对不上则清空字段并提示去「基础字典」维护，不让字典外的脏值流进台账
 function guardDict(field, v) {
   if (!v) return
   const list = dicts[field] || []
@@ -248,6 +278,8 @@ function guardDict(field, v) {
   ElMessage.warning(`${DICT_NAME[field]}「${bad}」不在基础字典中，请从下拉列表选择；需要新增请先到「基础字典」维护。`)
 }
 
+// onSubmit 前的最后一道闸：guardDict 可能被绕过（程序回填、浏览器自动填充），
+// 提交前再全量比对一次，防止字典外的值写进台账
 // 提交前兜底再校验一次
 function checkDicts() {
   for (const f of ['dept', 'app_system', 'problem_type']) {
@@ -266,23 +298,28 @@ function checkDicts() {
 // 输入服务内容时自动（防抖）触发推荐——实现「关键字自动识别服务内容」
 watch(() => form.service_content, debounceRecommend)
 
+// 追加而非覆盖：用户可能已经写了一半处理说明，直接替换会把已写内容冲掉
 function applySolutionText(text) {
   if (!text) return
   form.handle_desc = (form.handle_desc ? form.handle_desc + '\n' : '') + text
   ElMessage.success('已应用到处理说明')
 }
 
+// 上传成功只认 code === 0，避免把失败响应里的错误信息当成附件地址存下来
 function onUploadSuccess(res, file) {
   if (res && res.code === 0) {
     form.attachment.push(...res.data)
   }
 }
+// 移除附件时同步摘掉 form.attachment 里的 url，否则提交仍会带上已删掉的文件
 function onUploadRemove(file) {
   const url = file.response && file.response.data ? file.response.data[0] : null
   if (url) form.attachment = form.attachment.filter(u => u !== url)
 }
 
 // Ctrl+V 粘贴截图 → 自动上传为附件
+// 只认剪贴板里的 image/* 文件；纯文本粘贴原样交给输入框，不拦默认行为
+// 粘贴计数仅用于给回显项起个不重复的名字
 let pasteSeq = 0
 async function onPaste(e) {
   if (mode.value !== 'standard') return
@@ -297,6 +334,7 @@ async function onPaste(e) {
   if (!files.length) return
   e.preventDefault()
   try {
+    // 直接拿剪贴板里的 File 上传，不必先存盘再点选文件；成功后补一条回显记录
     const fd = new FormData()
     files.forEach((f, i) => fd.append('files', f, f.name || `paste-${Date.now()}-${i}.png`))
     const urls = await R.uploadFiles(fd)
@@ -308,6 +346,8 @@ async function onPaste(e) {
   }
 }
 
+// 标准录入分两步：先建工单，状态为已完成时再调 completeTicket 补完成信息与知识库同步；
+// 快捷录入只落一条「处理中」的草稿，细节留到工单记录里补
 async function onSubmit() {
   if (!form.happen_time || !form.service_content) {
     ElMessage.warning('请填写发生时间与服务内容')
@@ -358,6 +398,7 @@ async function onSubmit() {
   }
 }
 
+// 重置只清字段与附件，保留当前录入模式，避免被弹回标准录入
 function resetForm() {
   Object.assign(form, {
     happen_time: '', contact: '', dept: '', service_content: '',
@@ -367,6 +408,7 @@ function resetForm() {
   fileList.value = []
 }
 
+// 字典必须先到，后面 guardDict 才有比对依据
 onMounted(fetchDicts)
 </script>
 

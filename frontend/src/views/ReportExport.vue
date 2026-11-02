@@ -1,11 +1,23 @@
+<!--
+  报表导出 —— IT 运维工单台账与日报自动管理系统
+  按条件导出工单与统计报表
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <h3 class="it-section-title">报表导出</h3>
 
     <div class="it-card">
+      <!-- 列顺序固定沿用原 Excel 台账：运维同事拿到文件就能接着往下录，不用再对表头 -->
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px"
         title="导出字段严格沿用原有 Excel 表格格式：时间、联系人、部门、运维服务内容、应用系统、问题类别、完成时间、处理说明" />
 
+      <!-- 筛选条件全部可留空，留空即不限制；部门/系统/类别都从字典取，避免手填出同义词 -->
       <el-form :inline="true" :model="filters">
         <el-form-item label="时间段">
           <el-date-picker v-model="filters.range" type="daterange" value-format="YYYY-MM-DD" range-separator="~" start-placeholder="开始" end-placeholder="结束" />
@@ -33,20 +45,24 @@
           </el-select>
         </el-form-item>
         <el-form-item>
+          <!-- 先数条数再导出：条件写错时能立刻发现，不至于拉出几万行才发现要重来 -->
           <el-button type="primary" @click="preview"><el-icon><Search /></el-icon> 预览数量</el-button>
           <el-button type="success" @click="onExport"><el-icon><Download /></el-icon> 导出 Excel</el-button>
         </el-form-item>
       </el-form>
 
       <el-divider />
+      <!-- 条数独立展示：导出前先看这里，0 条说明筛选条件写反了 -->
       <div class="count">当前筛选条件下工单数量：<b>{{ count }}</b> 条</div>
     </div>
 
     <!-- 历史工单导入 -->
+    <!-- 老台账一次性搬进来用，不逐条手录；导入归属当前登录账号，所以数据隔离跟普通建单一致 -->
     <div class="it-card" style="margin-top:14px">
       <h4 class="it-section-title">导入历史工单</h4>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
         title="支持沿用原 Excel 表格直接导入：具体时间、联系人、部门、运维服务内容、应用系统、问题类别、服务完成时间、处理说明。仅支持 .xlsx（旧 .xls 请先另存为 .xlsx）；导入的数据归属当前登录账号，有完成时间的自动标记为已完成。" />
+      <!-- 用 http-request 接管上传，为了自己校验扩展名并自定义失败明细回显，不用组件默认请求 -->
       <el-upload
         drag
         accept=".xlsx"
@@ -60,6 +76,7 @@
           <div class="el-upload__tip">导入完成后可在「工单记录管理」中查看</div>
         </template>
       </el-upload>
+      <!-- 导入结果：只要有一条失败就转 warning，并把行号+原因列出来，方便回 Excel 改完再导 -->
       <div v-if="importResult" class="import-result">
         <el-alert
           :type="importResult.failed.length ? 'warning' : 'success'"
@@ -82,14 +99,20 @@ import { Search, Download, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import R from '../api'
 
+// 字典分三类缓存在同一个对象里，模板按 dicts.xxx 直接遍历，省掉三份独立的 ref
 const dicts = reactive({ dept: [], app_system: [], problem_type: [] })
+// 筛选条件。range 是日期数组 [start, end]，其余是字典标签的字符串
 const filters = reactive({ range: [], dept: '', app_system: '', problem_type: '', status: '' })
+// 预览到的条数，仅用于导出前确认
 const count = ref(0)
 
+// 拉字典：传 false 表示取启用项即可，停用的旧值不该再出现在筛选里
 async function loadDicts() {
   const data = await R.getDicts(false)
   dicts.dept = data.dept; dicts.app_system = data.app_system; dicts.problem_type = data.problem_type
 }
+// 只把有值的条件拼进参数。后端是按真值判断的（空串等于没选），
+// 所以留空的筛选项不必下发：参数干净，出问题时看请求就能还原当时的口径。
 function buildParams() {
   const p = {}
   if (filters.range && filters.range.length === 2) { p.start = filters.range[0]; p.end = filters.range[1] }
@@ -99,9 +122,12 @@ function buildParams() {
   if (filters.status) p.status = filters.status
   return p
 }
+// 预览条数：复用列表接口，只取 length 不渲染，口径与导出的过滤条件完全一致
 async function preview() {
   try { const rows = await R.listTickets(buildParams()); count.value = rows.length; ElMessage.success('已统计') } catch (e) { ElMessage.error(e.message) }
 }
+// 用临时 <a download> 触发下载，最后必须 revokeObjectURL，
+// 否则连续导出几次会在内存里堆着几个完整的 xlsx blob。
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -109,6 +135,8 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a)
   URL.revokeObjectURL(url)
 }
+// 导出 Excel。接口返回的是二进制流，交给 downloadBlob 落地，不能按 JSON 解析；
+// 文件名带导出日期，同一天导多次也能在下载目录里区分开。
 async function onExport() {
   try {
     const blob = await R.exportTicketsBlob(buildParams())
@@ -122,7 +150,10 @@ async function onExport() {
 
 // 导入历史工单
 const importing = ref(false)
+// 导入结果：{ inserted, failed: [{ row, reason }] }，failed 非空时表格列出明细
 const importResult = ref(null)
+// 自定义上传。前端先按扩展名挡一道（accept 只是提示，用户可以强行选别的文件），
+// 后端还会再校验一次内容，两层都过不了就不会写库。
 async function onImport({ file }) {
   const isXlsx = /\.xlsx$/i.test(file.name)
   if (!isXlsx) { ElMessage.error('仅支持 .xlsx 文件，旧 .xls 请先在 Excel 中另存为 .xlsx'); return }
@@ -139,6 +170,7 @@ async function onImport({ file }) {
   }
 }
 
+// 进页面先把字典备好，筛选下拉才有选项可选
 onMounted(loadDicts)
 </script>
 

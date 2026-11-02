@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/utils/ai.js
+ * @description OpenAI 兼容协议调用，多候选地址自动回退、HTTP 错误中文化、支持文本与图片理解
+ *
+ * 大模型调用封装 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 // OpenAI 兼容接口封装：可对接 DeepSeek / 通义千问 / Kimi / OpenAI / OpenRouter / LM Studio / Ollama / vLLM / 内网私有化大模型等
 // 配置为「每用户独立」，由前端在「AI 助手」中设置，不使用全局环境变量（避免多人共用同一 Token）。
 //
@@ -21,6 +33,12 @@ const LOCAL_ALIAS = process.env.AI_LOCALHOST_ALIAS !== undefined ? process.env.A
  *   http://h:1234/v1/        → http://h:1234/v1/chat/completions
  *   http://h:1234/v1/chat/completions → 原样
  *   https://api.deepseek.com/v1/chat/completions → 原样
+ *
+ * 只认 OpenAI 兼容协议，因此不做供应商特判，靠路径形态推断即可；
+ * 入参允许只填主机和端口，甚至是裸域名。
+ *
+ * @param {string} raw 用户填写的接口地址，允许省略协议与路径
+ * @returns {string} 完整端点；入参为空返回 ''（调用方据此判定「未配置」）
  */
 function normalizeBaseURL(raw) {
   let u = String(raw || '').trim().replace(/\s+/g, '')
@@ -40,12 +58,34 @@ function normalizeBaseURL(raw) {
 }
 
 // 把 localhost / 127.0.0.1 换成就宿主机别名（仅在容器内启用）
+/**
+ * 把本机回环地址改写成宿主机别名。
+ *
+ * 为什么要这一步：用户在宿主机上跑 LM Studio / Ollama，习惯填 http://localhost:1234/v1；
+ * 但后端跑在容器里时 localhost 指容器自身，请求必然 connection refused。
+ * 只有容器内才改写——宿主机直跑时 localhost 就是对的，改了反而连不上。
+ * LOCAL_ALIAS 置空可整体关闭该行为（例如容器也用了 host 网络）。
+ *
+ * @param {string} u 完整端点地址
+ * @returns {string} 改写后的地址，无需改写时原样返回
+ */
 function withHostAlias(u) {
   if (!LOCAL_ALIAS) return u
   return u.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?=[:/]|$)/i, `$1${LOCAL_ALIAS}`)
 }
 
 // 生成候选地址：容器内优先「改写后的宿主机地址」，再退原始地址
+/**
+ * 生成按优先级排序的候选地址列表（去重）。
+ *
+ * 回退策略：容器内把「宿主机别名版」排前面、原始地址作兜底；
+ * 宿主机直跑时反过来，把 host.docker.internal 版改写回 localhost 追加在后面。
+ * 这样同一份配置在「docker 部署」和「本地 node 直跑」两种形态下都能命中，
+ * 不必要求用户为两种环境各填一遍地址。
+ *
+ * @param {string} rawURL 用户填写的地址
+ * @returns {string[]} 候选端点，首个为首选；空配置返回 []
+ */
 function resolveCandidates(rawURL) {
   const norm = normalizeBaseURL(rawURL)
   if (!norm) return []
@@ -61,17 +101,38 @@ function resolveCandidates(rawURL) {
 }
 
 // 首选地址（真实调用用这个）
+/**
+ * 取候选列表的第一项，即实际发请求用的地址。
+ *
+ * @param {string} rawURL 用户填写的地址
+ * @returns {string} 首选端点，未配置返回 ''
+ */
 function resolveURL(rawURL) {
   const list = resolveCandidates(rawURL)
   return list[0] || ''
 }
 
 // 由 chat 端点推导模型列表端点
+/**
+ * 由 chat 端点反推 /models，供「获取模型列表」按钮使用。
+ * 依赖路径约定（…/chat/completions），因此只对已归一化的地址可靠。
+ *
+ * @param {string} u 已归一化的端点
+ * @returns {string} 模型列表端点
+ */
 function modelsURL(u) {
   return String(u || '').replace(/\/chat\/completions$/i, '/models')
 }
 
 // 从供应商返回体里提取可读信息（OpenRouter / OpenAI / 通义 / LM Studio 等格式兼容）
+/**
+ * 从各家供应商的错误返回体里挖出一句可读原因。
+ * 各家字段不统一：OpenAI 用 error.message，OpenRouter 还会把上游原文塞进
+ * error.metadata.raw，部分网关只给 message / detail，故按优先级逐个尝试。
+ *
+ * @param {string} rawText 响应原文
+ * @returns {string} 可读原因；非 JSON 时返回原文
+ */
 function extractDetail(rawText) {
   const raw = String(rawText || '').trim()
   if (!raw) return ''
@@ -91,6 +152,19 @@ function extractDetail(rawText) {
 }
 
 // 把 HTTP 错误翻译成用户能看懂的说明（附带实际请求地址与供应商原文，便于排查）
+/**
+ * 把状态码翻译成可操作的中文提示。
+ *
+ * 为什么不用通用文案：接大模型时最常见的问题是地址、模型名、额度、限流四类，
+ * 用户看不懂 404/429，必须直接告诉他「改哪里」。因此错误对象上额外挂了
+ * status / aiDetail / url 三个字段，前端可原样展示或折叠查看。
+ *
+ * @param {number} status HTTP 状态码
+ * @param {string} rawText 响应原文
+ * @param {string} model 本次请求的模型名
+ * @param {string} url 本次实际请求的地址
+ * @returns {Error} 带 status / aiDetail / url 的 Error 实例
+ */
 function friendlyHttpError(status, rawText, model, url) {
   const detail = extractDetail(rawText).slice(0, 300)
   const tail = detail ? `（供应商返回：${detail}）` : ''
@@ -130,6 +204,24 @@ function friendlyHttpError(status, rawText, model, url) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
+/**
+ * 发起一次对话补全（OpenAI 兼容 /chat/completions）。
+ *
+ * @param {Array<{role:string, content:*}>} messages 对话消息，system/user/assistant 顺序由调用方组织
+ * @param {object} [opts]
+ * @param {string} opts.baseURL 用户配置的接口地址（可只填到 /v1，内部会自动补全）
+ * @param {string} [opts.apiKey] Token；本地模型可留空，此时不发 Authorization 头
+ * @param {string} opts.model 模型名
+ * @param {number} [opts.temperature=0.4] 温度，工单总结类任务默认偏低以保证稳定
+ * @param {number} [opts.maxTokens=2000] 输出上限
+ * @param {number} [opts.retries=2] 限流/5xx 的重试次数（指数退避）
+ * @param {number} [opts.retryDelay=1200] 首次退避基准毫秒数
+ * @returns {Promise<string>} 模型返回的纯文本（已 trim）
+ * @throws {Error} 未配置时带 noConfig；网络不可达带 network + status=0；HTTP 错误带 status/aiDetail/url
+ *
+ * 重试口径：仅 429 / 408 / 5xx 重试；401/403/404 这类配置错误重试毫无意义，
+ * 会白白多等好几秒还掩盖真实原因。网络层异常同样直接抛出，交给用户改地址。
+ */
 async function chat(messages, {
   baseURL,
   apiKey,
@@ -200,6 +292,15 @@ async function chat(messages, {
 
 // 读取某用户生效中的 AI 配置（未启用或无地址返回 null，调用方降级为规则汇总）
 // 注意：本地模型（LM Studio / Ollama）不需要 Token，因此 api_key 允许为空
+/**
+ * 读取指定用户当前生效的 AI 配置。
+ *
+ * 设计为「每用户独立」：多人共用一套 Token 会互相打爆额度，也无法审计用量。
+ * 返回 null 是正常分支而非异常——调用方据此走规则汇总/模板生成，功能降级但不报错。
+ *
+ * @param {number} userId 用户 ID
+ * @returns {Promise<{provider:string, baseURL:string, apiKey:string, model:string}|null>}
+ */
 async function loadUserConfig(userId) {
   const rows = await query(
     'SELECT provider, api_url, api_key, model, is_enable FROM user_ai_config WHERE user_id = ?',

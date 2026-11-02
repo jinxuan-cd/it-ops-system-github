@@ -1,3 +1,13 @@
+<!--
+  待办抽屉 —— IT 运维工单台账与日报自动管理系统
+  侧滑面板展示今日待办并支持快速处理
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
     <div
     class="todo-float"
@@ -83,15 +93,18 @@ import { ElMessage } from 'element-plus'
 
 const userStore = useUserStore()
 const router = useRouter()
+// 服务台模式下车池显示「待指派」，否则显示「待接单」
 const desk = computed(() => workflow.service_desk_enable)
 
 // 用户手动设置过就尊重设置；没设置过时，窄屏（<1200）自动收起，避免遮挡表格
+// 两个开关都放 localStorage：面板属于个人使用习惯，跟着浏览器走就行，不必进后端
 const savedCollapse = localStorage.getItem('itops_todo_collapse')
 const collapsed = ref(savedCollapse === null ? window.innerWidth < 1200 : savedCollapse === '1')
 const visible = ref(localStorage.getItem('itops_show_todo_float') !== '0')
 const todos = ref([])
 const assigned = ref([])
 const pool = ref([])
+// 本月目标的三个显示值来自看板指标，独立存是为了进度圈能单独更新
 const goalDone = ref(0)
 const goalTotal = ref(0)
 const goalProgress = ref(0)
@@ -99,18 +112,22 @@ const assignedCount = ref(0)
 const loadFailed = ref(false)
 
 // 位置持久化
+// 面板要能压在表格上方随手拖，所以用 fixed + left/top 定位，坐标存 localStorage
 const panelEl = ref(null)
 const dragging = ref(false)
 const pos = ref(null) // { x, y }
 
+// 收起态宽度写死 44px，与 CSS 的 .todo-float.collapsed 保持一致
 function widthOf() {
   return collapsed.value ? 44 : 240
 }
+// 默认贴在页面右上角、顶栏下方（y=72 避开 56px 的 header）
 function defaultPos() {
   const w = window.innerWidth
   const h = window.innerHeight
   return { x: Math.max(10, w - widthOf() - 18), y: 72 }
 }
+// 懒加载位置：读取失败（存储被清或写坏）就回落到默认位置
 function ensurePos() {
   if (!pos.value) {
     pos.value = (() => {
@@ -118,6 +135,7 @@ function ensurePos() {
     })() || defaultPos()
   }
 }
+// 计算样式里顺手做位置初始化：模板首次渲染就要拿到 left/top，放在 onMounted 会先闪一下左上角
 const panelStyle = computed(() => {
   ensurePos()
   return { left: pos.value.x + 'px', top: pos.value.y + 'px' }
@@ -128,8 +146,11 @@ watch(collapsed, (v) => localStorage.setItem('itops_todo_collapse', v ? '1' : '0
 // 窗口变大后自动展开（只影响未手动收起的场景）
 
 // 拖拽逻辑
+// 用 pointer 事件而不是 mouse：手机/平板触摸和鼠标能共用一套代码；
+// 监听挂在 window 上，鼠标拖出面板范围也不会丢事件
 let startX = 0, startY = 0, startLeft = 0, startTop = 0, moved = false
 function onDragStart(e) {
+  // 只响应左键 / 单指，右键菜单和双指缩放不触发拖动
   if (e.button !== undefined && e.button !== 0) return
   ensurePos()
   startX = e.clientX
@@ -144,10 +165,12 @@ function onDragStart(e) {
 function onDragMove(e) {
   const dx = e.clientX - startX
   const dy = e.clientY - startY
+  // 3px 以内不算拖动：单纯点一下标题栏（想折叠）时手指的轻微抖动不该把面板挪走
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true
   let x = startLeft + dx
   let y = startTop + dy
   const w = widthOf()
+  // 夹在视口内：留 4px 边距，底部按 50px 估算，保证标题栏始终能拖回来
   x = Math.max(4, Math.min(x, window.innerWidth - w - 4))
   y = Math.max(4, Math.min(y, window.innerHeight - 50))
   pos.value = { x, y }
@@ -156,6 +179,7 @@ function onDragEnd() {
   dragging.value = false
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
+  // 拖动结束才落盘：拖动过程中每帧写 localStorage 会卡顿
   localStorage.setItem('itops_todo_pos', JSON.stringify(pos.value))
 }
 function toggleCollapse() {
@@ -192,6 +216,7 @@ async function load() {
   loadFailed.value = pending === null && dash === null
 }
 
+// 工单内容常是多行长文本，面板窄，只取首行前 26 字，超出补省略号
 function shortText(s) {
   const t = String(s || '').split('\n')[0]
   return t.length > 26 ? t.slice(0, 26) + '…' : (t || '（无内容）')
@@ -200,9 +225,11 @@ function shortText(s) {
 function openTicket(id) {
   router.push({ path: '/tickets', query: { open: id } })
 }
+// 「全部 →」跳到工单页的公海视图
 function goPool() {
   router.push({ path: '/tickets', query: { scope: 'pool' } })
 }
+// 在面板里直接接单：成功后刷新并打开详情，等于一次点击完成「领单 + 进入处理」
 async function claim(t) {
   try {
     await R.claimTicket(t.ticket_id)
@@ -218,6 +245,7 @@ async function claim(t) {
 // 实时事件：有新单 / 被接走 → 刷新待办与待接单列表
 function onRt() { load() }
 
+// 待办只支持「勾上完成」：取消勾选直接返回，避免已完成记录被反向改回未完成
 async function markDone(t, v) {
   if (!v) return
   try {
@@ -227,12 +255,14 @@ async function markDone(t, v) {
   } catch (e) { ElMessage.error(e.message) }
 }
 
+// 跨标签页：设置页在另一个标签改了开关，这里通过 storage 事件同步
 function onStorage(e) {
   if (e.key === 'itops_show_todo_float') {
     visible.value = localStorage.getItem('itops_show_todo_float') !== '0'
     if (visible.value) ensurePos()
   }
 }
+// 同标签页：storage 事件不会在自己页面触发，所以设置页额外派发自定义事件补上这条路
 function onSettingsChanged(e) {
   if (e.detail && e.detail.key === 'itops_show_todo_float') {
     visible.value = localStorage.getItem('itops_show_todo_float') !== '0'

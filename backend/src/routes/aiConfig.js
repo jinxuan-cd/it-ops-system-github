@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/aiConfig.js
+ * @description 模型地址、密钥、模型名配置，连通性自测与模型列表拉取
+ *
+ * AI 接入配置路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const { query } = require('../db')
@@ -9,6 +21,15 @@ router.use(auth)
 
 // 获取本人 AI 接入配置
 // api_key 出于安全不回显明文，仅返回 has_key 标记；首次访问返回默认供应商模板
+/**
+ * 读取本人 AI 配置。权限：登录用户只能读写自己的配置。
+ * 不回显密钥明文（只给 has_key），避免通过接口把 Token 抓走；
+ * configured 只看「启用 + 地址 + 模型」，本地模型不需要 Token，所以不把密钥作为必要条件。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/config', asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT config_id, provider, api_url, model, is_enable,
@@ -42,6 +63,14 @@ router.get('/config', asyncHandler(async (req, res) => {
 }))
 
 // 保存本人 AI 接入配置
+/**
+ * 保存本人 AI 配置（每人一份，有则更新无则新建）。
+ * 权限：登录用户只能改自己的。api_key 留空表示保留原密钥，避免前端只改模型时把 Token 清掉。
+ *
+ * @param {import('express').Request} req body: provider / api_url / api_key / model / is_enable
+ * @param {import('express').Response} res { api_url } 返回补全后的真实请求地址
+ * @returns {Promise<void>}
+ */
 router.put('/config', asyncHandler(async (req, res) => {
   const { provider, api_key, model, is_enable } = req.body
   // 地址自动补全：只填 /v1 或根地址也能用（存库时统一为完整端点）
@@ -70,6 +99,16 @@ router.put('/config', asyncHandler(async (req, res) => {
 // 测试连接：用传入的临时配置做一次最小调用，验证 Token / 地址 / 模型是否有效（不落库）
 // 会自动尝试候选地址（补全 /chat/completions、容器内 localhost → host.docker.internal），
 // 成功时返回实际可用的 working_url，前端可一键回填。
+/**
+ * 连接自测：用传入的临时配置发一次最小请求（只让模型回「成功」），不写库。
+ * 权限：登录用户；未填地址/模型/密钥时自动用已保存的配置兜底。
+ * 逐个尝试候选地址（补全 /chat/completions、容器内 localhost 换 host.docker.internal），
+ * 全部失败才报错，并回传尝试链便于排查；maxTokens=16 + retries=0 保证失败得快。
+ *
+ * @param {import('express').Request} req body: api_url / api_key / model
+ * @param {import('express').Response} res { ok, working_url, normalized_url, candidates }
+ * @returns {Promise<void>}
+ */
 router.post('/test', asyncHandler(async (req, res) => {
   let { api_url, api_key, model } = req.body
   if (!api_url || !model) {
@@ -105,6 +144,16 @@ router.post('/test', asyncHandler(async (req, res) => {
 }))
 
 // 列出该接口可用模型（GET /v1/models），方便用户挑准确模型名
+/**
+ * 拉取该接口的可用模型清单，避免用户手填模型名拼错后一直调不通。
+ * 权限：登录用户；未填地址或密钥时用已保存配置兜底。
+ * 兼容 OpenAI 的 data[] 与部分厂商的 models[] 两种返回结构；
+ * 接口不支持 /models 时逐个候选地址试完再报错，提示改为手动填写。
+ *
+ * @param {import('express').Request} req body: api_url / api_key
+ * @param {import('express').Response} res { models[], endpoint }
+ * @returns {Promise<void>}
+ */
 router.post('/models', asyncHandler(async (req, res) => {
   let { api_url, api_key } = req.body
   if (!api_url) {

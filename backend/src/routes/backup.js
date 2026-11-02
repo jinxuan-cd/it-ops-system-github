@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/backup.js
+ * @description 数据库容量信息、备份生成、列表、下载、上传与本地恢复
+ *
+ * 备份恢复路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 // 系统备份与恢复
 // ---------------------------------------------------------------------------
 // 备份产物是一个 .zip 压缩包（相当于「整机快照」），结构：
@@ -47,12 +59,24 @@ router.use(auth, adminOnly)
 // 基础工具
 // ---------------------------------------------------------------------------
 function pad(n) { return String(n).padStart(2, '0') }
+
+/**
+ * 备份包时间戳，格式 YYYYMMDD-HHmmssSSS（带毫秒）。
+ *
+ * @param {Date} d
+ * @returns {string}
+ */
 function stamp(d = new Date()) {
   // 带毫秒，避免同一秒内生成两个备份包互相覆盖（恢复前的快照会把要恢复的包覆盖掉）
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${String(d.getMilliseconds()).padStart(3, '0')}`
 }
 
 // 只备份基表（视图 v_ticket_duration 这类不能写回）
+/**
+ * 列出当前库里所有基表（排除视图），恢复时也只认这批表。
+ *
+ * @returns {Promise<string[]>} 表名数组
+ */
 async function listTables() {
   const rows = await query(
     `SELECT TABLE_NAME AS t FROM information_schema.TABLES
@@ -61,6 +85,11 @@ async function listTables() {
   return rows.map(r => r.t)
 }
 
+/**
+ * 逐表全量导出成内存对象；单表失败只置空数组，不让一张坏表毁掉整次备份。
+ *
+ * @returns {Promise<{tables: string[], data: Record<string, object[]>}>}
+ */
 async function dumpAll() {
   const tables = await listTables()
   const data = {}
@@ -70,6 +99,12 @@ async function dumpAll() {
   return { tables, data }
 }
 
+/**
+ * 递归统计目录体积与文件数；目录不存在按 0 处理（首次部署时 uploads 可能还没建）。
+ *
+ * @param {string} dir
+ * @returns {{bytes: number, files: number}}
+ */
 function dirSize(dir) {
   let total = 0
   let files = 0
@@ -89,6 +124,13 @@ function dirSize(dir) {
 function mb(bytes) { return Math.round((bytes / 1024 / 1024) * 100) / 100 }
 
 // 文件名安全校验：只允许本系统生成过的备份包名
+/**
+ * 备份包名校验，防止 ../ 之类的路径穿越读到备份目录外的文件。
+ * 前缀匹配 + 目录归属双重校验，两条都过才返回绝对路径。
+ *
+ * @param {string} name
+ * @returns {string|null} 合法时返回绝对路径，非法返回 null
+ */
 function safeName(name) {
   const n = String(name || '')
   if (!/^itops-backup-[0-9-]+\.zip$/.test(n)) return null
@@ -100,6 +142,15 @@ function safeName(name) {
 // ---------------------------------------------------------------------------
 // 生成备份包
 // ---------------------------------------------------------------------------
+/**
+ * 生成一个备份包（meta.json + db.json + uploads/）并清理超量旧包。
+ * reason 只写进 meta 便于排查：manual=手动、pre-restore=恢复前自动快照；
+ * protect 传本次要恢复的包名，防止它在清理时被自己删掉。
+ *
+ * @param {string} reason manual|pre-restore
+ * @param {string|null} protect 需要免于清理的备份包名
+ * @returns {Promise<{name: string, size: number, size_mb: number, meta: object}>}
+ */
 async function createBackup(reason = 'manual', protect = null) {
   const { data } = await dumpAll()
   const counts = {}
@@ -145,6 +196,14 @@ async function createBackup(reason = 'manual', protect = null) {
 }
 
 // 只保留最近的 KEEP 个自动/手动备份包
+/**
+ * 按修改时间倒序保留最近 KEEP 个，超出的删掉；刚生成的与正在恢复的那一个豁免。
+ * 全程吞异常：清理失败不影响备份本身是否成功。
+ *
+ * @param {string} justCreated 刚生成的包名，永不删
+ * @param {string|null} protect 额外的豁免包名
+ * @returns {void}
+ */
 function pruneOld(justCreated, protect = null) {
   try {
     const files = fs.readdirSync(BACKUP_DIR)
@@ -162,6 +221,12 @@ function pruneOld(justCreated, protect = null) {
 // 从备份包恢复（自动解包）
 // ---------------------------------------------------------------------------
 // 先把备份包整体读进内存：后面生成「恢复前快照」就不会覆盖到正在恢复的这个包
+/**
+ * 校验并读入备份包，没有 db.json 直接判定为非本系统的包，避免后面误清表。
+ *
+ * @param {string} zipPath 压缩包绝对路径
+ * @returns {import('adm-zip')} 已载入内存的 zip 对象
+ */
 function readZip(zipPath) {
   let zip
   try { zip = new AdmZip(zipPath) } catch { throw new Error('压缩包无法解压，可能已损坏或不是 zip 文件') }
@@ -170,6 +235,15 @@ function readZip(zipPath) {
 }
 
 // 已读入内存的备份包 → 附件落盘 + 数据表整体替换
+/**
+ * 恢复主体：先回写附件，再在单个事务里整表替换数据。
+ * 事务内关掉外键检查（否则删表顺序会被约束卡死），失败 rollback 并抛错；
+ * 备份里有、当前库里没有的旧表直接跳过，避免往不存在的表里写；
+ * 恢复后若一个可用管理员都不剩，把当前操作人补回去，防止把自己锁在系统外。
+ *
+ * @param {import('adm-zip')} zip 已载入内存的备份包
+ * @returns {Promise<{tables: Record<string, number>, files: number, meta: object, admin_restored: boolean}>}
+ */
 async function restoreFromZipObject(zip) {
   const dbEntry = zip.getEntry('db.json')
   const metaEntry = zip.getEntry('meta.json')
@@ -266,6 +340,14 @@ async function restoreFromZipObject(zip) {
 // 路由
 // ---------------------------------------------------------------------------
 // 概览：表条数、库体积、附件体积、服务端备份目录
+/**
+ * 备份页概览：各表条数、数据库占用、附件占用、备份目录与保留策略。
+ * 权限：仅管理员。单项统计失败按 0 处理，页面永远能打开。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/info', asyncHandler(async (req, res) => {
   const out = {}
   try {
@@ -298,6 +380,14 @@ router.get('/info', asyncHandler(async (req, res) => {
 }))
 
 // 立即备份：生成 zip（同时留在服务端备份目录，可直接下载）
+/**
+ * 手动备份：生成一个整机快照包并留在服务端，前端可直接下载。
+ * 权限：仅管理员。返回总行数便于提示「这次备了多少数据」。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/create', asyncHandler(async (req, res) => {
   const { name, size, size_mb, meta } = await createBackup('manual')
   ok(res, { name, size, size_mb, total_rows: Object.values(meta.tables).reduce((a, b) => a + b, 0) }, '备份包已生成')
@@ -307,6 +397,14 @@ router.post('/create', asyncHandler(async (req, res) => {
 // 注意：这个接口在设置页一打开就会调用，**任何情况下都不能 500**，
 // 否则用户看到的就是「读取备份列表失败 + status code 500」。
 // 目录不存在 / 权限不足 / 单个文件 stat 失败，都降级为「空列表 + 提示原因」。
+/**
+ * 服务端备份包列表，按文件名倒序（时间戳在名字里，等价于时间倒序）。
+ * 权限：仅管理员。任何异常都转成 warn 字段返回，绝不让接口 500。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res { dir, keep, files[], warn }
+ * @returns {Promise<void>}
+ */
 router.get('/list', asyncHandler(async (req, res) => {
   const files = []
   let warn = dirError
@@ -335,6 +433,14 @@ router.get('/list', asyncHandler(async (req, res) => {
 }))
 
 // 下载某个备份包
+/**
+ * 下载备份包：文件名先过 safeName 校验，防止越权读取其他文件。
+ * 权限：仅管理员。走流式输出，大包不会占满内存。
+ *
+ * @param {import('express').Request} req req.params.name 备份包名
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/download/:name', asyncHandler(async (req, res) => {
   const p = safeName(req.params.name)
   if (!p || !fs.existsSync(p)) return fail(res, '备份文件不存在')
@@ -344,6 +450,13 @@ router.get('/download/:name', asyncHandler(async (req, res) => {
 }))
 
 // 删除备份包
+/**
+ * 删除服务端备份包。权限：仅管理员；同样先过 safeName 校验。
+ *
+ * @param {import('express').Request} req req.params.name
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.delete('/:name', asyncHandler(async (req, res) => {
   const p = safeName(req.params.name)
   if (!p || !fs.existsSync(p)) return fail(res, '备份文件不存在')
@@ -352,6 +465,15 @@ router.delete('/:name', asyncHandler(async (req, res) => {
 }))
 
 // 恢复：方式一 —— 上传 .zip（最大 1GB），服务端自动解包
+/**
+ * 上传包恢复：先读进内存再做「恢复前快照」，最后整库替换。
+ * 权限：仅管理员。临时文件在 finally 里删除，失败也不留垃圾。
+ * 顺序不能颠倒：快照会写进备份目录，先落盘再快照能避免覆盖到正在用的包。
+ *
+ * @param {import('express').Request} req multipart 字段名 file
+ * @param {import('express').Response} res 返回各表行数、附件数、快照包名
+ * @returns {Promise<void>}
+ */
 router.post('/upload-restore', zipUpload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) return fail(res, '请选择备份压缩包（.zip）')
   const tmp = req.file.path
@@ -371,6 +493,14 @@ router.post('/upload-restore', zipUpload.single('file'), asyncHandler(async (req
 }))
 
 // 恢复：方式二 —— 直接用服务端已有的备份包
+/**
+ * 本地包恢复：直接用服务端备份目录里已有的包回滚。
+ * 权限：仅管理员。protect 传入自身，保证「恢复前快照」清理时不会把这个包删掉。
+ *
+ * @param {import('express').Request} req req.body.name 备份包名
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/restore-local', asyncHandler(async (req, res) => {
   const p = safeName(req.body && req.body.name)
   if (!p || !fs.existsSync(p)) return fail(res, '备份文件不存在')

@@ -1,3 +1,15 @@
+/**
+ * @file backend/src/routes/users.js
+ * @description 运维人员账号、角色与状态维护
+ *
+ * 人员管理路由 —— IT 运维工单台账与日报自动管理系统
+ *
+ * @author 锦轩 (JinXuan) <2686389727@qq.com>
+ * @copyright Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * @license 个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *          其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ * @created 2026-10-29
+ */
 const express = require('express')
 const router = express.Router()
 const bcrypt = require('bcryptjs')
@@ -6,12 +18,24 @@ const { ok, fail, asyncHandler } = require('../utils/helpers')
 const { auth, adminOnly, clearAuthCache, ROLES } = require('../middleware/auth')
 
 // 角色白名单校验：admin（管理员）/ auditor（审计员，只读全公司）/ service（服务台，派单）/ user（运维工程师）
+/**
+ * 角色白名单校验：非法值一律回落 user，避免前端传错把账号搞成「无角色」而什么都点不开。
+ *
+ * @param {string} r
+ * @returns {string}
+ */
 function normRole(r) { return ROLES.includes(r) ? r : 'user' }
 
 // 仅管理员可访问用户管理
 router.use(auth, adminOnly)
 
 // 当前还有几个可用的管理员（防止把自己降权/停用/删掉后再也进不了后台）
+/**
+ * 统计其余可用管理员数量（排除指定账号），用于「至少保留一个管理员」的守门判断。
+ *
+ * @param {number|null} excludeId 要排除的账号 ID
+ * @returns {Promise<number>}
+ */
 async function activeAdminCount(excludeId = null) {
   const rows = excludeId
     ? await query("SELECT COUNT(*) AS n FROM sys_user WHERE role = 'admin' AND is_enable = 1 AND user_id <> ?", [excludeId])
@@ -20,6 +44,14 @@ async function activeAdminCount(excludeId = null) {
 }
 
 // 列表
+/**
+ * 人员列表。权限：仅管理员（router.use 已统一拦截）。
+ * 只返回展示字段，密码哈希永不出库到接口。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.get('/', asyncHandler(async (req, res) => {
   const rows = await query(
     'SELECT user_id, username, real_name, role, is_enable, create_time FROM sys_user ORDER BY user_id'
@@ -28,6 +60,14 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 新增
+/**
+ * 新建人员账号。权限：仅管理员。
+ * 密码 bcrypt 存哈希、至少 6 位；账号名唯一，重复直接拒绝；新账号默认启用。
+ *
+ * @param {import('express').Request} req body: username / password / real_name / role
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.post('/', asyncHandler(async (req, res) => {
   const { username, password, real_name, role } = req.body
   if (!username || !password) return fail(res, '账号和密码必填')
@@ -44,6 +84,17 @@ router.post('/', asyncHandler(async (req, res) => {
 }))
 
 // 修改（含启用/停用、改密码）
+/**
+ * 修改人员信息：显示名、角色、启用状态、重置密码，只改传入的字段。
+ * 权限：仅管理员。
+ * 保底规则：任何会让「可用管理员」归零的操作（降级/停用最后一个管理员）一律拒绝，
+ *          否则会把自己锁在系统外面，只能改库才能救回来；
+ *          改完立刻清掉该账号的权限缓存，让新角色马上生效而不是等 60 秒。
+ *
+ * @param {import('express').Request} req req.params.id 为目标账号，body 可含 real_name / role / is_enable / password
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.put('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id)
   const { real_name, role, is_enable, password } = req.body
@@ -80,6 +131,15 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }))
 
 // 删除
+/**
+ * 删除人员账号。权限：仅管理员，且不能删自己、不能删掉最后一个可用管理员。
+ * 口径：历史工单与知识库属于业务痕迹，一律保留，只把「指派人」解绑，
+ *      这样历史统计里不会出现指向已删除账号的空处理人。
+ *
+ * @param {import('express').Request} req req.params.id 为 user_id
+ * @param {import('express').Response} res
+ * @returns {Promise<void>}
+ */
 router.delete('/:id', asyncHandler(async (req, res) => {
   const id = Number(req.params.id)
   // 不允许删除自己

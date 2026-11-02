@@ -1,3 +1,13 @@
+<!--
+  SLA 时限设置 —— IT 运维工单台账与日报自动管理系统
+  按问题类别与优先级配置响应、解决时限
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.2.1
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
 <template>
   <div class="it-page">
     <div class="it-between page-head">
@@ -6,11 +16,13 @@
         <div class="page-sub">按问题类别设定响应与解决时限，超时工单会在工时列表和看板中标红</div>
       </div>
       <div class="head-actions">
+        <!-- 改完策略必须手动重算：历史工单存的是生成时的时限快照，不重算就还是旧口径 -->
         <el-button size="small" :loading="recalcing" @click="onRecalc">按当前策略重算历史工单</el-button>
         <el-button type="primary" size="small" @click="openCreate"><el-icon><Plus /></el-icon> 新增策略</el-button>
       </div>
     </div>
 
+    <!-- 匹配优先级口径写在页面上：策略命中顺序直接决定超时判定，配错一条就整类工单失真 -->
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
       <template #title>
         匹配优先级：问题类别 + 优先级精确匹配 &gt; 仅问题类别 &gt; 默认策略（*）。未单独配置的类别一律走默认策略。
@@ -18,6 +30,7 @@
     </el-alert>
 
     <div class="it-card">
+      <!-- 默认策略（*）只能编辑不能删：它是兜底，删了未配置类别就没有时限可依 -->
       <el-table :data="rows" stripe border v-loading="loading" empty-text="暂无策略">
         <el-table-column label="问题类别" width="180">
           <template #default="{ row }">
@@ -45,6 +58,7 @@
     </div>
 
     <el-dialog v-model="formVisible" :title="form.policy_id ? '编辑策略' : '新增策略'" width="520px">
+      <!-- 类别允许直接手输（allow-create）：字典还没收录的新场景，也应该能先配上时限 -->
       <el-form :model="form" label-width="96px">
         <el-form-item label="问题类别">
           <el-select v-model="form.problem_type" filterable allow-create style="width:100%" placeholder="选字典项或输入自定义">
@@ -82,23 +96,32 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import R from '../api'
 
+// 策略列表。行里 problem_type='*' 表示默认兜底策略，priority 为空表示该类别下不限优先级
 const rows = ref([])
 const loading = ref(false)
+// 重算进行中标记：重算要遍历历史工单，耗时明显，必须有 loading 防重复触发
 const recalcing = ref(false)
+// 问题类别字典，只用来给下拉提供候选项
 const dicts = reactive({ problem_type: [] })
 const formVisible = ref(false)
 const saving = ref(false)
+// 弹窗表单。新增时先清空整个对象，避免编辑过的行残留字段带进下一条
 const form = reactive({})
 
+// 优先级枚举转中文，表格和提示里统一用这套叫法
 function priorityLabel(p) {
   return { urgent: '紧急', high: '高', normal: '普通', low: '低' }[p] || p
 }
 
+// 拉策略列表。列表按问题类别名排序展示，并不是命中顺序；
+// 真正的命中顺序（类别+优先级 > 仅类别 > *）由后端取值时判定，看到的第一行不一定先被用上。
 async function load() {
   loading.value = true
   try { rows.value = await R.listSla() } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 
+// 新增：默认给「* 默认策略 + 4 小时响应 / 24 小时解决」，
+// 这是最常见的兜底口径，多数情况下改个数字就能存。
 function openCreate() {
   Object.keys(form).forEach(k => delete form[k])
   form.problem_type = '*'
@@ -106,11 +129,14 @@ function openCreate() {
   form.resolve_hours = 24
   formVisible.value = true
 }
+// 编辑：把整行拷进表单，policy_id 存在与否决定保存时走更新还是新建
 function openEdit(row) {
   Object.keys(form).forEach(k => delete form[k])
   Object.assign(form, row)
   formVisible.value = true
 }
+// 保存策略。注意：这里只改策略本身，不会自动重算历史工单，
+// 要让新时限对已产生的工单生效，得再点一次「按当前策略重算历史工单」。
 async function onSave() {
   saving.value = true
   try {
@@ -121,6 +147,8 @@ async function onSave() {
     load()
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
 }
+// 删除策略。先确认再删——删掉后该类别工单会回落到更低优先级的策略（最终是 *），
+// 时限可能一下子变宽，等于历史超时记录会「变正常」，所以要提醒。
 async function onDelete(row) {
   try {
     await ElMessageBox.confirm('确认删除该策略？删除后相关工单会回落到默认策略。', '提示', { type: 'warning' })
@@ -131,6 +159,8 @@ async function onDelete(row) {
     load()
   } catch (e) { ElMessage.error(e.message) }
 }
+// 按当前策略重算历史工单的时限与超时标记。
+// 回显重算条数而不只是「成功」，让用户确认覆盖范围符合预期（0 条通常说明策略没生效）。
 async function onRecalc() {
   recalcing.value = true
   try {
@@ -139,6 +169,7 @@ async function onRecalc() {
   } catch (e) { ElMessage.error(e.message) } finally { recalcing.value = false }
 }
 
+// 首屏：策略列表必须成功才有内容，字典失败只影响新增时的候选项，所以分开放错误处理
 onMounted(async () => {
   load()
   try {
