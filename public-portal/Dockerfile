@@ -12,9 +12,9 @@ FROM nginx:1.27-alpine
 LABEL maintainer="锦轩 <2686389727@qq.com>" \
       org.opencontainers.image.authors="锦轩 <2686389727@qq.com>" \
       org.opencontainers.image.title="IT 运维工单台账与日报系统 - 员工自助门户" \
-      org.opencontainers.image.version="1.2.0" \
+      org.opencontainers.image.version="1.2.1" \
       org.opencontainers.image.vendor="锦轩 (JinXuan)" \
-      org.opencontainers.image.licenses="Commercial (see LICENSE)" \
+      org.opencontainers.image.licenses="LicenseRef-ITOps-Source-Available-1.0 (see LICENSE)" \
       org.opencontainers.image.copyright="Copyright (c) 2026 锦轩 (JinXuan). All rights reserved."
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf

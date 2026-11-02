@@ -109,12 +109,19 @@ IT Ops Ticket & Report Management System License
 
 第五条  第三方组件
 
-5.1 本软件使用了若干第三方开源组件（Vue、Element Plus、ECharts、
-    Express、MariaDB 等），这些组件各自适用其原有许可协议，
-    具体清单与许可类型见 NOTICE 文件。
+5.1 本软件使用了若干第三方组件（Vue、Element Plus、ECharts、Express、
+    MariaDB 等），这些组件各自适用其原有许可协议，著作权归各自作者所有。
+    逐项清单（含实际安装版本、许可协议、来源仓库与许可原文）见
+    THIRD-PARTY-LICENSES.txt；授权摘要与特别说明见 NOTICE 文件。
 
 5.2 本协议仅约束作者拥有著作权的部分，不改变、不替代任何第三方组件
-    的许可条款。你对第三方组件的使用应同时遵守其许可要求。
+    的许可条款，作者亦不对第三方组件作任何再授权。你对第三方组件的
+    使用应同时遵守其许可要求。
+
+5.3 本软件以依赖包形式引入第三方组件，未将第三方源码复制进本项目。
+    MIT / BSD 类许可要求保留版权与许可声明，Apache-2.0 要求随分发物
+    附许可副本，故本项目随构建产物发布 THIRD-PARTY-LICENSES.txt。
+    你若对外分发本软件或其修改版本，应一并保留该文件或提供等效声明。
 
 第六条  无担保
 
@@ -295,12 +302,23 @@ license.
 
 5. THIRD-PARTY COMPONENTS
 
-5.1 The Software uses third-party open source components (Vue, Element Plus,
-    ECharts, Express, MariaDB, etc.), each governed by its own license.
-    See the NOTICE file for the list.
+5.1 The Software uses third-party components (Vue, Element Plus, ECharts,
+    Express, MariaDB, etc.), each governed by its own license and owned by
+    its respective authors. The itemized list - actual installed versions,
+    licenses, source repositories and full license texts - is in
+    THIRD-PARTY-LICENSES.txt; a summary is in the NOTICE file.
 
 5.2 This License governs only the parts copyrighted by the Author and does
-    not alter any third-party license terms.
+    not alter any third-party license terms. The Author grants no
+    sublicense for any third-party component.
+
+5.3 Third-party components are consumed as dependency packages; no
+    third-party source code has been copied into this project. MIT / BSD
+    style licenses require retaining copyright and license notices, and
+    Apache-2.0 requires supplying a copy of the license, so this project
+    ships THIRD-PARTY-LICENSES.txt alongside its build output. If you
+    distribute the Software or a Modified Version, you must keep that file
+    or provide an equivalent notice.
 
 6. NO WARRANTY
 

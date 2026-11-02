@@ -42,6 +42,7 @@
 - [更新日志](#更新日志)
 - [贡献与反馈](#贡献与反馈)
 - [授权与商业许可](#授权与商业许可)
+- [第三方组件与许可合规](#第三方组件与许可合规)
 - [关于作者与版权声明](#关于作者与版权声明)
 
 ---
@@ -879,19 +880,69 @@ A：能改，免费范围内随便改。但修改版本仍受本协议约束，�
 
 ---
 
+## 第三方组件与许可合规
+
+本项目不重复造轮子，能用的成熟组件一律以依赖形式引入，**不复制任何第三方源码进仓库**。
+所有组件的许可信息记录在 [`THIRD-PARTY-LICENSES.txt`](./THIRD-PARTY-LICENSES.txt)，包含：
+
+- 全部 422 个组件（后端 307 + 前端 115）的**实际安装版本**、许可协议、来源仓库
+- 每份许可协议的**完整原文**（内容相同的已合并，各组件版权行原样保留）
+- 需要特别说明的组件：jszip 双许可择一、buffers 未声明、pako 双许可、MariaDB GPL 隔离
+
+三种查看方式：仓库根目录的 `THIRD-PARTY-LICENSES.txt`、管理端「关于与开源许可」页面、
+部署后的 `/THIRD-PARTY-LICENSES.txt`。
+
+### 为什么清单必须放进构建产物
+
+Vite 打包时会剥离依赖里的版权注释，`dist` 里连一条 `Copyright` 都剩不下。
+而 MIT / BSD 要求「在所有副本中保留版权与许可声明」，Apache-2.0（ECharts）要求
+「随分发物附一份许可副本」——只靠源码里的注释并不算履约。所以构建时把清单输出到
+站点根目录，随产物一起分发。
+
+### 重新生成
+
+新增或升级依赖后执行：
+
+```bash
+npm --prefix backend ci        # 按锁文件装，保证版本与清单一致
+npm --prefix frontend ci
+node scripts/gen-third-party-licenses.js
+```
+
+脚本会同时更新 `THIRD-PARTY-LICENSES.txt`、`frontend/public/THIRD-PARTY-LICENSES.txt`
+（随构建进入 dist）与 `frontend/src/generated/third-party.json`（「关于」页面用）。
+**不要手工编辑这些文件**——它们记录的是实际安装结果，手改必然与实物脱节。
+
+### 许可自检结论
+
+| 检查项 | 结果 |
+|---|---|
+| AGPL / GPL-only / SSPL / BUSL / CC-BY-NC 等强传染或限制商用的许可 | **无** |
+| 涉及 GPL 字样的组件 | 仅 `jszip` 的 `(MIT OR GPL-3.0-or-later)`，本项目择一适用 **MIT** |
+| 复制的第三方核心实现、vendor 目录、压缩混淆代码 | **无** |
+| 内联第三方库、CDN 外链脚本、内嵌第三方字体或图片 | **无** |
+| 上游未声明许可的组件 | `buffers@0.1.1`（上游缺 license 字段，其仓库长期以 MIT 发布，风险低） |
+| 数据库 MariaDB 的 GPL-2.0 | 独立进程使用 + `mysql2`（MIT 纯协议实现），不构成衍生作品 |
+
+依赖版本以 `package-lock.json` 为准；容器构建使用 `npm ci` 而非 `npm install`，
+保证部署版本与清单一致、构建可复现。
+
+---
+
 ## 关于作者与版权声明
 
 - **作者**：锦轩（JinXuan）
 - **联系邮箱**：2686389727@qq.com
-- **项目版本**：1.2.0
+- **项目版本**：1.2.1
 - **著作权**：本项目（含后端服务、管理端前端、公众报障门户、数据库脚本、部署脚本与文档）为独立原创作品，著作权归 **锦轩** 所有，非任何其他工单系统的衍生版本。
 
 ```
 Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
 ```
 
-第三方开源组件（Vue、Element Plus、ECharts、Express、MariaDB 等）著作权归各自作者所有，
-适用其原有许可，清单见 [NOTICE](./NOTICE)。
+第三方组件（Vue、Element Plus、ECharts、Express、MariaDB 等）著作权归各自作者所有，
+适用其原有许可，逐项清单与许可原文见 [THIRD-PARTY-LICENSES.txt](./THIRD-PARTY-LICENSES.txt)，
+授权摘要与特别说明见 [NOTICE](./NOTICE)。
 
 **本软件按「现状」提供，不附带任何明示或默示担保。** 生产环境部署前请完整测试并建立独立备份。
 

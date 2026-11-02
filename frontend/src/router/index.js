@@ -63,7 +63,10 @@ const routes = [
       // 日报月报查阅：管理员 / 审计员看全员提交情况与内容
       { path: 'report-review', name: 'ReportReview', component: () => import('../views/ReportReview.vue'), meta: { viewAll: true } },
       { path: 'ai-assistant', name: 'AiAssistant', component: () => import('../views/AiAssistant.vue'), meta: { write: true } },
-      { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') }
+      { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') },
+      // 关于与开源许可：所有人可看。放在这里是为了部署交付时客户能自己找到
+      // 版权归属、授权范围与第三方组件清单，不用去翻源码仓库。
+      { path: 'about', name: 'About', component: () => import('../views/About.vue') }
     ]
   }
 ]

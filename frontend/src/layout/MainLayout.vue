@@ -25,7 +25,8 @@
           </el-menu-item>
         </template>
       </el-menu>
-      <!-- 版权与版本：跟随菜单滚动到末尾才出现，折叠态隐藏，不占菜单空间 -->
+      <!-- 版权与版本：侧边栏是纵向 flex，菜单区自己滚动，这一行钉在底部；
+           折叠态隐藏，避免 64px 宽度里挤不下一行字 -->
       <div v-show="!collapsed" class="aside-copy">© 2026 锦轩 · v{{ appVersion }}</div>
     </el-aside>
 
@@ -177,7 +178,9 @@ const menus = computed(() => {
           { path: '/users', icon: 'User', title: '账号管理' }
         ] : []),
         ...(viewAll ? [{ path: '/audit-logs', icon: 'DocumentChecked', title: '操作审计日志' }] : []),
-        { path: '/settings', icon: 'Tools', title: '系统设置' }
+        { path: '/settings', icon: 'Tools', title: '系统设置' },
+        // 版权与第三方许可：交付部署后客户能自己查到授权范围与组件清单
+        { path: '/about', icon: 'InfoFilled', title: '关于与开源许可' }
       ]
     }
   ]

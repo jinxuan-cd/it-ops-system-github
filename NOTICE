@@ -47,48 +47,93 @@ Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
 ================================================================================
 三、第三方组件
 ================================================================================
-本项目使用了以下第三方组件。这些组件各自适用其原有许可协议，
-其著作权归各自作者所有，不受本项目许可协议约束。
+本项目使用了第三方组件。这些组件各自适用其原有许可协议，
+其著作权归各自作者所有，不受本项目许可协议约束，本项目也不对其再授权。
 
-【后端运行时依赖】backend/package.json
-  express            ^4.19.2     MIT
-  mysql2             ^3.11.0     MIT
-  bcryptjs           ^2.4.3      MIT
-  jsonwebtoken       ^9.0.2      MIT
-  cors               ^2.8.5      MIT
-  dotenv             ^16.4.5     BSD-2-Clause
-  multer             ^1.4.5      MIT
-  exceljs            ^4.4.0      MIT
-  archiver           ^7.0.1      MIT
-  adm-zip            ^0.5.16     MIT
-  mammoth            ^1.8.0      BSD-2-Clause
-  pdf-parse          ^1.1.1      MIT
+【完整清单在哪里】
+  逐项列出全部组件的名称、实际安装版本、许可协议、来源仓库，并附各许可协议
+  完整原文的清单，见根目录 THIRD-PARTY-LICENSES.txt。该文件同时：
+    · 随管理端构建产物发布，部署后可直接访问 /THIRD-PARTY-LICENSES.txt
+    · 在管理端「关于与开源许可」页面在线查看与下载
+  清单由 node scripts/gen-third-party-licenses.js 扫描实际安装结果自动生成，
+  记录的是**实际安装版本**而非 package.json 的声明范围（^4.19.2 实际可能装到
+  4.22.3，清单与实物不符等于没写）。新增或升级依赖后请重新生成，不要手工维护。
 
-【前端运行时依赖】frontend/package.json
-  vue                ^3.4.31     MIT
-  vue-router         ^4.4.0      MIT
-  pinia              ^2.1.7      MIT
-  element-plus       ^2.7.6      MIT
-  @element-plus/icons-vue ^2.3.1 MIT
-  echarts            ^5.5.1      Apache-2.0
-  axios              ^1.7.2      MIT
-  qrcode             ^1.5.4      MIT
+  截至本声明更新时：共 422 个组件（后端 307 个 + 前端 115 个），
+  许可分布为 MIT 356、ISC 28、Apache-2.0 13、BSD-3-Clause 8、BSD-2-Clause 6、
+  BlueOak-1.0.0 4，其余为 Unlicense / 0BSD / MIT-X11 / Zlib 等宽松许可。
 
-【前端构建工具】frontend/package.json devDependencies
-  vite               ^5.3.3      MIT
-  @vitejs/plugin-vue ^5.0.5      MIT
+【后端直接依赖】实际安装版本
+  express            4.22.3      MIT
+  mysql2             3.24.6      MIT
+  bcryptjs           2.4.3       MIT
+  jsonwebtoken       9.0.3       MIT
+  cors               2.8.6       MIT
+  dotenv             16.6.1      BSD-2-Clause
+  multer             1.4.5-lts.2 MIT
+  exceljs            4.4.0       MIT
+  archiver           7.0.1       MIT
+  adm-zip            0.5.16      MIT
+  mammoth            1.13.0      BSD-2-Clause
+  pdf-parse          1.1.4       MIT
 
-【运行时基础软件】
-  Node.js            MIT（官方二进制分发另有其许可条款）
-  MariaDB 10.11      GPL-2.0（作为独立数据库进程使用，不构成衍生作品）
+【前端直接依赖】实际安装版本
+  vue                3.5.44      MIT
+  vue-router         4.6.4       MIT
+  pinia              2.3.1       MIT
+  element-plus       2.14.7      MIT
+  @element-plus/icons-vue 2.3.2  MIT
+  echarts            5.6.0       Apache-2.0
+  axios              1.20.0      MIT
+  qrcode             1.5.4       MIT
+
+【前端构建期依赖】不进入生产运行产物
+  vite               5.4.21      MIT
+  @vitejs/plugin-vue 5.2.4       MIT
+
+【运行时基础软件】以独立进程方式使用，非本项目分发物
+  Node.js            MIT
+  MariaDB 10.11      GPL-2.0（独立数据库进程，不构成衍生作品，详见下文第 4 条）
   Nginx              BSD-2-Clause
   Docker / Compose   Apache-2.0
 
 【前端字体与图标】
-  系统字体栈，未内嵌第三方字体文件；图标来自 @element-plus/icons-vue（MIT）。
+  系统字体栈，未内嵌任何第三方字体文件；图标来自 @element-plus/icons-vue（MIT）。
 
-说明：以上版本号为 package.json 中的声明范围，实际安装版本以 lock 文件为准。
-若你替换、升级或新增第三方组件，请自行核对其许可条款的合规性。
+【需要特别留意的组件】
+  1) jszip 3.10.2 —— 双许可 (MIT OR GPL-3.0-or-later)
+     jszip 同时以 MIT 与 GPL-3.0-or-later 授权，使用者可任选其一。
+     本项目明确选择适用 MIT，而非 GPL-3.0-or-later，因此 jszip 不构成本项目
+     受 GPL 传染的原因，也不要求本项目以 GPL 发布。
+     jszip 由 exceljs 间接引入，用于 Excel 文件的压缩容器读写。
+     若你二次开发后改用 GPL-3.0-or-later 分发，请自行重新履行该协议的义务。
+
+  2) buffers 0.1.1 —— 上游未声明许可字段
+     该包 package.json 无 license 字段，包内也没有 LICENSE 文件，属上游历史
+     遗留问题（作者 James Halliday，2012 年发布）；其源码仓库
+     github.com/substack/node-buffers 长期以 MIT 发布。
+     本项目通过 exceljs → unzipper → binary 间接引入，仅在服务端进程内使用，
+     不修改、不再分发该包源码。风险评估为低；如需彻底消除，可换用不依赖
+     unzipper 的 Excel 库。
+
+  3) pako 1.0.11 —— (MIT AND Zlib)
+     需同时满足 MIT 与 Zlib，二者均为宽松许可、可商用、可闭源分发，
+     仅要求保留声明，无冲突。
+
+  4) MariaDB 10.11 —— GPL-2.0（不传染本项目）
+     本项目以「独立数据库进程」方式使用 MariaDB：通过 SQL 网络协议通信，
+     不链接其库代码、不修改其源码、不与其编译成单一作品，因此不构成 GPL
+     意义上的衍生作品，本项目无需按 GPL 发布。这是商业软件使用
+     MySQL / MariaDB 的通行方式。
+     所用驱动 mysql2 是 MIT 许可的纯 JavaScript 协议实现，不链接
+     libmysqlclient / libmariadb 等 GPL 客户端库。若你改用官方 C 客户端库
+     或 GPL 版连接器，则可能构成链接从而触发 GPL，请务必先评估。
+
+【二次开发提示】
+  MIT / BSD 类许可要求在所有副本中保留版权与许可声明，Apache-2.0（如 ECharts）
+  要求随分发物附一份许可副本。打包工具会剥离依赖里的版权注释，因此不能只靠
+  源码注释履约 —— 本项目通过随产物发布 THIRD-PARTY-LICENSES.txt 来满足该义务。
+  你若二次开发并对外分发，请一并保留该文件，或在自己的产物中提供等效声明。
 
 ================================================================================
 四、免责
