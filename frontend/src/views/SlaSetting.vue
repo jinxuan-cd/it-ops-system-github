@@ -171,6 +171,13 @@ async function onDelete(row) {
     await R.deleteSla(row.policy_id)
     ElMessage.success('已删除')
     load()
+    // 删掉一条精确行，相关工单会回落到更宽的默认策略，
+    // 但存量工单仍存着旧时限快照，不重算的话超时标记不会跟着变
+    try {
+      await ElMessageBox.confirm('策略已删除。相关工单需要按当前策略重算一次才会更新超时标记，现在重算吗？',
+        '重算历史工单', { type: 'info', confirmButtonText: '立即重算', cancelButtonText: '稍后手动重算' })
+      await onRecalc()
+    } catch { /* 用户选择稍后 */ }
   } catch (e) { ElMessage.error(e.message) }
 }
 // 按当前策略重算历史工单的时限与超时标记。

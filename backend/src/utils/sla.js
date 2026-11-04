@@ -87,19 +87,41 @@ function addHours(dtStr, hours) {
  * @param {string} happenTime 发生时间
  * @param {string} problemType 问题类别
  * @param {string} [priority] 优先级
- * @param {string} [respondTime] 接单/派单时间（= 开始处理时间），未接单传 null
+ * @param {string} [resolveBase] 完成时限的起算点，缺省用发生时间；应由 resolveBaseOf() 给出
  * @returns {Promise<{sla_respond_due:string|null, sla_resolve_due:string|null}>}
  * @sideeffect 每次调用都会查一次策略表（不缓存），改完策略即刻生效
  */
-async function computeDue(happenTime, problemType, priority, respondTime) {
+async function computeDue(happenTime, problemType, priority, resolveBase) {
   const policies = await loadPolicies()
   const pol = pickPolicy(policies, problemType, priority)
-  // 完成时限的起算点：接过单就从接单起算，没接过单退回发生时间
-  const resolveBase = respondTime || happenTime
   return {
     sla_respond_due: addHours(happenTime, pol.respond_hours),
-    sla_resolve_due: addHours(resolveBase, pol.resolve_hours)
+    sla_resolve_due: addHours(resolveBase || happenTime, pol.resolve_hours)
   }
+}
+
+/**
+ * 完成时限的起算点：只有「真正开始处理」的时刻才配当基线。
+ *
+ * 判定顺序：
+ * 1. 没有 respond_time —— 从未接单，按发生时间算；
+ * 2. 已完成且 respond_time >= finish_time —— 那是「直接完成」时补记的响应时间，
+ *    不是真的接单，按发生时间算（否则完成时限 = 结束 + 24h，永远不到期）；
+ * 3. 未完成但状态是 pending —— 已被退回公海，当前无人处理，按发生时间算；
+ * 4. 其余（处理中的接单、已完成且接单早于完成）—— 从接单时间算。
+ *
+ * 这三条分支必须被 applySla / backfillSla / realignResolveFromRespond 共用，
+ * 否则「新建时按接单算、点了重算改按发生算」，同一张单会得出两个超时结论。
+ *
+ * @param {{happen_time?:string, respond_time?:string, finish_time?:string, status?:string}} row
+ * @returns {string|null} 'YYYY-MM-DD HH:mm:ss'
+ */
+function resolveBaseOf(row) {
+  const happen = row.happen_time || null
+  const rt = row.respond_time
+  if (!rt) return happen
+  if (row.finish_time) return String(rt) < String(row.finish_time) ? rt : happen
+  return row.status === 'pending' ? happen : rt
 }
 
 /**
@@ -218,14 +240,11 @@ function slaStateOf(row, nowStr) {
  * 少一处就会出现换了策略/接了单而截止时间还是旧值的错账。
  */
 async function applySla(ticketId) {
-  const rows = await query('SELECT happen_time, problem_type, priority, respond_time, finish_time FROM ticket WHERE ticket_id = ?', [ticketId])
+  const rows = await query('SELECT happen_time, problem_type, priority, respond_time, finish_time, status FROM ticket WHERE ticket_id = ?', [ticketId])
   if (!rows.length) return
   const t = rows[0]
   if (!t.happen_time) return
-  // 起算点判断：只有「真正接过单」（响应时间早于完成时间）才从接单起算。
-  // 未接单、直接被完成的单，respond_time 是完成时补记的，拿它当基线会让完成时限永远不到期。
-  const claimed = t.respond_time && (!t.finish_time || String(t.respond_time) < String(t.finish_time))
-  const due = await computeDue(t.happen_time, t.problem_type, t.priority, claimed ? t.respond_time : null)
+  const due = await computeDue(t.happen_time, t.problem_type, t.priority, resolveBaseOf(t))
   await query(
     'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
     [due.sla_respond_due, due.sla_resolve_due, ticketId]
@@ -245,21 +264,28 @@ async function applySla(ticketId) {
  */
 async function backfillSla() {
   let total = 0
+  let lastId = 0
+  const policies = await loadPolicies()
+  // 用 ticket_id 游标推进而不是「取 NULL 的前 5000 条」：
+  // happen_time 是脏值（如 '0000-00-00 00:00:00'）时 addHours 返回 null，
+  // 该行会永远是 NULL，按 NULL 分页会一次次重复取到同一批，接口直接卡死。
   for (;;) {
     const rows = await query(
-      'SELECT ticket_id, happen_time, problem_type, priority, respond_time FROM ticket WHERE happen_time IS NOT NULL AND sla_resolve_due IS NULL LIMIT 5000'
+      `SELECT ticket_id, happen_time, problem_type, priority, respond_time, finish_time, status
+       FROM ticket
+       WHERE ticket_id > ? AND happen_time IS NOT NULL AND sla_resolve_due IS NULL
+       ORDER BY ticket_id LIMIT 5000`,
+      [lastId]
     )
     if (!rows.length) break
-    const policies = await loadPolicies()
     for (const t of rows) {
       const pol = pickPolicy(policies, t.problem_type, t.priority)
-      // 与 computeDue 保持同一口径：完成时限从接单时间起算，没接单退回发生时间
-      const base = t.respond_time || t.happen_time
       await query(
         'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
-        [addHours(t.happen_time, pol.respond_hours), addHours(base, pol.resolve_hours), t.ticket_id]
+        [addHours(t.happen_time, pol.respond_hours), addHours(resolveBaseOf(t), pol.resolve_hours), t.ticket_id]
       )
     }
+    lastId = rows[rows.length - 1].ticket_id
     total += rows.length
     if (rows.length < 5000) break
   }
@@ -283,7 +309,7 @@ async function realignResolveFromRespond(batch = 1000) {
   const policies = await loadPolicies()
   for (;;) {
     const rows = await query(
-      `SELECT ticket_id, happen_time, problem_type, priority, respond_time FROM ticket
+      `SELECT ticket_id, happen_time, problem_type, priority, respond_time, finish_time, status FROM ticket
        WHERE ticket_id > ? AND respond_time IS NOT NULL AND happen_time IS NOT NULL
        ORDER BY ticket_id LIMIT ${Number(batch)}`,
       [lastId]
@@ -293,7 +319,9 @@ async function realignResolveFromRespond(batch = 1000) {
       const pol = pickPolicy(policies, t.problem_type, t.priority)
       await query(
         'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
-        [addHours(t.happen_time, pol.respond_hours), addHours(t.respond_time, pol.resolve_hours), t.ticket_id]
+        // 起算点走 resolveBaseOf：完成时补记的「假接单」和已退回公海的单会退回发生时间，
+        // 不能一律拿 respond_time 当基线
+        [addHours(t.happen_time, pol.respond_hours), addHours(resolveBaseOf(t), pol.resolve_hours), t.ticket_id]
       )
     }
     lastId = rows[rows.length - 1].ticket_id
@@ -305,5 +333,5 @@ async function realignResolveFromRespond(batch = 1000) {
 
 module.exports = {
   loadPolicies, pickPolicy, computeDue, slaStateOf, addHours, applySla,
-  backfillSla, realignResolveFromRespond, hoursBetween, localNow, DEFAULT_POLICY
+  backfillSla, realignResolveFromRespond, hoursBetween, localNow, resolveBaseOf, DEFAULT_POLICY
 }

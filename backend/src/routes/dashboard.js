@@ -153,7 +153,11 @@ router.get('/extra', asyncHandler(async (req, res) => {
   )
   const sla = await query(
     `SELECT
-       SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()) AS overdue,
+       -- 超期口径与工单列表徽标一致：未完成的单里，超过完成时限或（还没人接单且）超过响应时限都算超期
+       SUM(status <> 'done' AND (
+         (sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW())
+         OR (respond_time IS NULL AND sla_respond_due IS NOT NULL AND sla_respond_due < NOW())
+       )) AS overdue,
        SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due >= NOW()
            AND sla_resolve_due < DATE_ADD(NOW(), INTERVAL 4 HOUR)) AS soon
      FROM ticket WHERE 1=1 ${ticketCond}`
@@ -455,7 +459,10 @@ async function periodStat(start, end, sc) {
        COUNT(*) AS accepted,
        SUM(status = 'done') AS closed,
        SUM(status <> 'done') AS pending,
-       SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()) AS overdue_open,
+       SUM(status <> 'done' AND (
+         (sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW())
+         OR (respond_time IS NULL AND sla_respond_due IS NOT NULL AND sla_respond_due < NOW())
+       )) AS overdue_open,
        SUM(status = 'done' AND sla_resolve_due IS NOT NULL AND finish_time IS NOT NULL
            AND finish_time > sla_resolve_due) AS overdue_done,
        ROUND(AVG(satisfy_score), 2) AS satisfy_avg,

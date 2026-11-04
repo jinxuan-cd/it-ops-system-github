@@ -310,28 +310,9 @@ async function migrateModules() {
   // 工单流转：服务台是可选角色。默认 0 = 不开服务台，新工单直接通知全部运维抢单
   if ((await settingGet('service_desk_enable')) === null) await settingSet('service_desk_enable', '0')
 
-  // 2026-11：早期 init.sql 预置了 4 条按优先级收紧的策略（低 2h/普通 1h/高 0.5h/紧急 0.5h），
-  // 和用户以为的「4 小时响应 / 24 小时完成」直接打架：工单会命中精确行，显示「已超时」，
-  // 而设置页最显眼的那条默认策略其实没被用上。
-  // 只有在策略表仍是这 4 条原样默认值时才收敛成一条默认策略；用户自己改过的行一律不动。
-  if (!(await metaDone('migr_20261104_sla_default_collapse'))) {
-    const rows = await query('SELECT problem_type, priority, respond_hours, resolve_hours FROM sla_policy ORDER BY policy_id')
-    const legacy = [
-      ['*', 'low', 2, 24], ['*', 'normal', 1, 24], ['*', 'high', 0.5, 4], ['*', 'urgent', 0.5, 2]
-    ]
-    const untouched = rows.length === 4 && rows.every((r, i) =>
-      r.problem_type === legacy[i][0] && r.priority === legacy[i][1] &&
-      Number(r.respond_hours) === legacy[i][2] && Number(r.resolve_hours) === legacy[i][3])
-    if (untouched) {
-      await query('DELETE FROM sla_policy')
-      await query(
-        `INSERT INTO sla_policy (problem_type, priority, respond_hours, resolve_hours, remark)
-         VALUES ('*', NULL, 4, 24, '默认策略：4 小时内响应，接单后 24 小时内解决')`
-      )
-      console.log('[migrate] 已将 4 条按优先级的旧默认策略收敛为一条默认策略（4h 响应 / 接单后 24h 解决）')
-    }
-    await markMeta('migr_20261104_sla_default_collapse')
-  }
+  // 注意：这里**不要**再做「把多条按优先级的策略收敛成一条默认策略」之类的迁移。
+  // 策略表是管理员的自定义配置，按优先级分行配置（低/普通/高/紧急）是完全合法的用法，
+  // 自动清表会让别人辛苦配的时限凭空消失。要改口径只能由管理员在页面上改。
 
   // 历史工单回填 SLA 截止时间（只补空的，不会覆盖已算好的）
   const { backfillSla } = require('./sla')

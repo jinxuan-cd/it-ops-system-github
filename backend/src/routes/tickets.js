@@ -443,8 +443,10 @@ router.post('/:id/assign', asyncHandler(async (req, res) => {
   if (!u.length) return fail(res, '该用户不存在或已停用')
 
   const t2 = nowStr()
-  // 首次指派即视为「已响应」；完成时限同时从这一刻起算（接单 = 开始处理）
-  const respondTime = t.respond_time || t2
+  // 首次指派即视为「已响应」；完成时限同时从这一刻起算（接单 = 开始处理）。
+  // 待接单的单（可能是退回公海后又派出来的）用本次派单时间重新计时，
+  // 否则沿用它上一轮被接单的时间，完成时限会一上手就已经超期。
+  const respondTime = t.status === 'pending' ? t2 : (t.respond_time || t2)
   await query(
     `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?,
        status = CASE WHEN status = 'pending' THEN 'processing' ELSE status END
@@ -501,8 +503,10 @@ router.post('/:id/claim', asyncHandler(async (req, res) => {
   if (t.status !== 'pending') return fail(res, '该工单已被接取或已完成，请刷新列表')
 
   const t2 = nowStr()
+  // 接单时间一律记本次接单：单子可能被人接过后又退回公海，
+  // 保留上一次的响应时间会让「完成时限 = 上次接单 + 24h」早就过期，新接的人一接手就背锅
   const r = await query(
-    `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = COALESCE(respond_time, ?), status = 'processing'
+    `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?, status = 'processing'
      WHERE ticket_id = ? AND assignee_id IS NULL AND status = 'pending'`,
     [req.user.user_id, t2, t2, req.params.id]
   )
@@ -544,6 +548,9 @@ router.post('/:id/release', asyncHandler(async (req, res) => {
     `UPDATE ticket SET assignee_id = NULL, assign_time = NULL, status = 'pending' WHERE ticket_id = ?`,
     [req.params.id]
   )
+  // 退回公海后当前无人处理，完成时限要从发生时间重新算（resolveBaseOf 对 pending 的处理），
+  // 不重算的话它还挂在上一位接单人的时限上，谁接手都显示超期
+  await applySla(req.params.id).catch(() => {})
   await closeTicketTodos(req.params.id).catch(() => {})
   const r = await dispatchTicket(rows[0]).catch(() => ({ notified: 0 }))
   rt.broadcast('ticket:released', { ticket_id: Number(req.params.id) })

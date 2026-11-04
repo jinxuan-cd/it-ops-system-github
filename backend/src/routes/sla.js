@@ -38,6 +38,62 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 /**
+ * 把「问题类别 + 优先级」归一成一个比较用的键。
+ * NULL 与空串都视为默认类别 `*` / 不限优先级，手工输入带空格也不会漏判。
+ *
+ * @param {string} problemType
+ * @param {string} priority
+ * @returns {string}
+ */
+function normKey(problemType, priority) {
+  const t = String(problemType || '*').trim() || '*'
+  const p = String(priority || '').trim()
+  return `${t}|${p}`
+}
+
+/**
+ * 判重：同一个「问题类别 + 优先级」只允许存在一条策略。
+ *
+ * 允许重复会造成「新配的不生效」：pickPolicy 按 policy_id 顺序取第一条命中的，
+ * 管理员改的那条若排在后面就完全用不上 —— 页面上明明配了 4 小时，实际仍按旧那条算。
+ *
+ * @param {string} problemType 待保存的问题类别
+ * @param {string|null} priority 待保存的优先级
+ * @param {number} [selfId] 编辑时排除自身
+ * @returns {Promise<object|null>} 冲突的已有策略行，无冲突返回 null
+ */
+async function findDuplicate(problemType, priority, selfId) {
+  const rows = await query('SELECT policy_id, problem_type, priority FROM sla_policy WHERE policy_id <> ?', [selfId || 0])
+  const key = normKey(problemType, priority)
+  return rows.find(r => normKey(r.problem_type, r.priority) === key) || null
+}
+
+/**
+ * 把页面传来的小时数转成合法正数，空值/非法值退回默认值。
+ * 不能写成 `Number(v) || 4`：那样把「响应 0 小时（立即响应）」静默改成 4 小时。
+ *
+ * @param {*} v 原始值
+ * @param {number} dft 默认值
+ * @returns {number}
+ */
+function hoursOr(v, dft) {
+  if (v === undefined || v === null || v === '') return dft
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : dft
+}
+
+/**
+ * 文本字段归一：null/undefined 一律当空串。
+ * 不能直接 String(v)——前端把 remark: null 原样提交上来会被存成字符串 "null"。
+ *
+ * @param {*} v
+ * @returns {string}
+ */
+function txt(v) {
+  return v === null || v === undefined ? '' : String(v).trim()
+}
+
+/**
  * 新增 SLA 策略。权限：仅管理员。
  * 问题类别不填记为 *（通配），响应默认 4 小时、解决默认 24 小时，
  * 策略生效还要点一次 /recalc 才回填到存量工单。
@@ -48,9 +104,14 @@ router.get('/', asyncHandler(async (req, res) => {
  */
 router.post('/', adminOnly, asyncHandler(async (req, res) => {
   const b = req.body
+  const problemType = txt(b.problem_type) || '*'
+  const priority = txt(b.priority) || null
+  if (await findDuplicate(problemType, priority)) {
+    return fail(res, '已存在相同「问题类别 + 优先级」的策略，请直接编辑那一条')
+  }
   const r = await query(
     'INSERT INTO sla_policy (problem_type, priority, respond_hours, resolve_hours, remark) VALUES (?,?,?,?,?)',
-    [b.problem_type || '*', b.priority || null, Number(b.respond_hours) || 4, Number(b.resolve_hours) || 24, b.remark || null]
+    [problemType, priority, hoursOr(b.respond_hours, 4), hoursOr(b.resolve_hours, 24), txt(b.remark) || null]
   )
   ok(res, { policy_id: r.insertId }, '已新增策略')
 }))
@@ -59,17 +120,34 @@ router.post('/', adminOnly, asyncHandler(async (req, res) => {
  * 修改 SLA 策略。权限：仅管理员。空字符串存成 NULL，保持「未设置」的一种表示。
  * 注意：改完只影响之后算出的截止时间，存量工单要调 /recalc 重算。
  *
+ * 保存前先判重：把类别/优先级改成与另一条相同，会让其中一条永远命中不到。
+ *
  * @param {import('express').Request} req req.params.id 为 policy_id
  * @param {import('express').Response} res
  * @returns {Promise<void>}
  */
 router.put('/:id', adminOnly, asyncHandler(async (req, res) => {
   const b = req.body
+  const cur = await query('SELECT * FROM sla_policy WHERE policy_id = ?', [req.params.id])
+  if (!cur.length) return fail(res, '策略不存在')
+
+  // 未传的字段按原值参与判重，避免只改时限却被判成「改成别的类别」
+  const effType = b.problem_type !== undefined ? (txt(b.problem_type) || '*') : cur[0].problem_type
+  const effPri = b.priority !== undefined ? (txt(b.priority) || null) : cur[0].priority
+  // 只有「类别/优先级」真的被改动才判重：
+  // 老库里若已存在重复行，只改时限时不该被拦住，否则那两条永远改不动
+  const keyChanged = normKey(effType, effPri) !== normKey(cur[0].problem_type, cur[0].priority)
+  if (keyChanged && (await findDuplicate(effType, effPri, req.params.id))) {
+    return fail(res, '已存在相同「问题类别 + 优先级」的策略，请直接编辑那一条')
+  }
+
   const sets = []
   const vals = []
-  ;['problem_type', 'priority', 'respond_hours', 'resolve_hours', 'remark'].forEach(f => {
-    if (b[f] !== undefined) { sets.push(`${f} = ?`); vals.push(b[f] === '' ? null : b[f]) }
-  })
+  if (b.problem_type !== undefined) { sets.push('problem_type = ?'); vals.push(effType) }
+  if (b.priority !== undefined) { sets.push('priority = ?'); vals.push(effPri) }
+  if (b.remark !== undefined) { sets.push('remark = ?'); vals.push(txt(b.remark) || null) }
+  if (b.respond_hours !== undefined) { sets.push('respond_hours = ?'); vals.push(hoursOr(b.respond_hours, Number(cur[0].respond_hours))) }
+  if (b.resolve_hours !== undefined) { sets.push('resolve_hours = ?'); vals.push(hoursOr(b.resolve_hours, Number(cur[0].resolve_hours))) }
   if (!sets.length) return fail(res, '无更新字段')
   vals.push(req.params.id)
   const r = await query(`UPDATE sla_policy SET ${sets.join(', ')} WHERE policy_id = ?`, vals)

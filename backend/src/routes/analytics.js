@@ -415,7 +415,11 @@ async function slaOf(range) {
        SUM(respond_time IS NOT NULL AND sla_respond_due IS NOT NULL AND respond_time <= sla_respond_due) AS respond_ok,
        SUM(status = 'done' AND finish_time IS NOT NULL AND sla_resolve_due IS NOT NULL) AS resolve_base,
        SUM(status = 'done' AND finish_time IS NOT NULL AND sla_resolve_due IS NOT NULL AND finish_time <= sla_resolve_due) AS resolve_ok,
-       SUM(status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()) AS overdue_now
+       -- 与工单列表徽标同口径：未完成且（超过完成时限，或未接单但已过响应时限）
+       SUM(status <> 'done' AND (
+         (sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW())
+         OR (respond_time IS NULL AND sla_respond_due IS NOT NULL AND sla_respond_due < NOW())
+       )) AS overdue_now
      FROM ticket WHERE ${cond('happen_time', range)}`
   )
   const r = rows[0] || {}
@@ -640,7 +644,10 @@ router.get('/person', asyncHandler(async (req, res) => {
     ),
     query(
       `SELECT COUNT(*) AS c FROM ticket
-       WHERE ${OWNER} = ? AND status <> 'done' AND sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW()`, [userId]
+       WHERE ${OWNER} = ? AND status <> 'done' AND (
+         (sla_resolve_due IS NOT NULL AND sla_resolve_due < NOW())
+         OR (respond_time IS NULL AND sla_respond_due IS NOT NULL AND sla_respond_due < NOW())
+       )`, [userId]
     ),
     query(
       `SELECT ROUND(AVG(satisfy_score), 2) AS avg_score, COUNT(*) AS cnt FROM ticket
