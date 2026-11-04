@@ -159,7 +159,12 @@ router.get('/', asyncHandler(async (req, res) => {
   if (problem_type) { where.push('t.problem_type = ?'); params.push(problem_type) }
   if (status) { where.push('t.status = ?'); params.push(status) }
   if (sla === 'overdue') {
-    where.push("(t.status <> 'done' AND t.sla_resolve_due IS NOT NULL AND t.sla_resolve_due < NOW())")
+    // 「超时」筛选与列表徽标同一口径：未完成时响应或完成任一段超时都算，
+    // 已完成时不在此列（已完成单的超时看状态即可，不需要再进「待处理超时」视图）
+    where.push(`(t.status <> 'done' AND (
+      (t.sla_resolve_due IS NOT NULL AND t.sla_resolve_due < NOW())
+      OR (t.respond_time IS NULL AND t.sla_respond_due IS NOT NULL AND t.sla_respond_due < NOW())
+    ))`)
   }
   if (keyword) {
     where.push('(t.service_content LIKE ? OR t.handle_desc LIKE ? OR t.contact LIKE ? OR t.report_no LIKE ?)')
@@ -367,9 +372,14 @@ router.put('/:id', asyncHandler(async (req, res) => {
   if (clearFinish && req.body.status === undefined) b.status = 'processing'
 
   // 只在同时涉及时间/状态时纠正；先取原值，避免单改一个字段被误判
+  let oldRow = null
   if (b.happen_time !== undefined || b.finish_time !== undefined || b.status !== undefined) {
-    const old = await query(`SELECT happen_time, finish_time, status FROM ticket WHERE ticket_id = ? ${sc.clause}`, [req.params.id, ...sc.params])
+    const old = await query(
+      `SELECT happen_time, finish_time, status, respond_time FROM ticket WHERE ticket_id = ? ${sc.clause}`,
+      [req.params.id, ...sc.params]
+    )
     if (!old.length) return fail(res, '工单不存在或无权限')
+    oldRow = old[0]
     const fixed = normalizeTimes({
       happen_time: b.happen_time !== undefined ? safeDate(b.happen_time) : safeDate(old[0].happen_time),
       finish_time: b.finish_time !== undefined ? safeDate(b.finish_time) : safeDate(old[0].finish_time),
@@ -378,6 +388,10 @@ router.put('/:id', asyncHandler(async (req, res) => {
     b.happen_time = fixed.happen_time
     b.finish_time = fixed.finish_time
     if (fixed.status) b.status = fixed.status
+    // 结束时间不能早于接单时间：处理耗时 = 结束 - 接单，倒挂会算出负数
+    if (b.finish_time && old[0].respond_time && String(b.finish_time) < String(old[0].respond_time)) {
+      b.finish_time = old[0].respond_time
+    }
   }
 
   const sets = []
@@ -387,13 +401,20 @@ router.put('/:id', asyncHandler(async (req, res) => {
     if (b[f] !== undefined) { sets.push(`${f} = ?`); vals.push(DATE_FIELDS.includes(f) ? normDate(b[f]) : b[f]) }
   })
   if (b.attachment !== undefined) { sets.push('attachment = ?'); vals.push(JSON.stringify(b.attachment)) }
+
+  // 编辑里直接把状态改成已完成、而这张单从没接过单：把响应时间补成结束时间，
+  // 否则详情里「响应时间」永远空白，响应达成率也统计不到这张单
+  if (b.status === 'done' && b.finish_time && oldRow && !oldRow.respond_time) {
+    sets.push('respond_time = ?'); vals.push(b.finish_time)
+  }
   if (!sets.length) return fail(res, '无更新字段')
 
   vals.push(req.params.id, ...sc.params)
   const result = await query(`UPDATE ticket SET ${sets.join(', ')} WHERE ticket_id = ? ${sc.clause}`, vals)
   if (result.affectedRows === 0) return fail(res, '工单不存在或无权限')
-  // 发生时间 / 问题类别 / 优先级变了，SLA 截止时间要跟着重算
-  if (b.happen_time !== undefined || b.problem_type !== undefined || b.priority !== undefined) {
+  // 发生时间 / 问题类别 / 优先级变了，或者刚补了完成时间，SLA 截止时间要跟着重算
+  if (b.happen_time !== undefined || b.problem_type !== undefined || b.priority !== undefined ||
+      (!oldRow || !oldRow.finish_time) && b.finish_time) {
     await applySla(req.params.id).catch(() => {})
   }
   ok(res, null, '更新成功')
@@ -422,7 +443,7 @@ router.post('/:id/assign', asyncHandler(async (req, res) => {
   if (!u.length) return fail(res, '该用户不存在或已停用')
 
   const t2 = nowStr()
-  // 首次指派即视为「已响应」，用于 SLA 响应达成率；待接单状态同时推进为处理中
+  // 首次指派即视为「已响应」；完成时限同时从这一刻起算（接单 = 开始处理）
   const respondTime = t.respond_time || t2
   await query(
     `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?,
@@ -430,6 +451,8 @@ router.post('/:id/assign', asyncHandler(async (req, res) => {
      WHERE ticket_id = ?`,
     [assigneeId, t2, respondTime, req.params.id]
   )
+  // 响应时间变了，完成时限要按接单时间重算（未接单时是按发生时间算的）
+  await applySla(req.params.id).catch(() => {})
   // 已派出去的单，别人的接单提醒一起关掉
   await closeTicketTodos(req.params.id).catch(() => {})
 
@@ -485,6 +508,8 @@ router.post('/:id/claim', asyncHandler(async (req, res) => {
   )
   // affectedRows=0 说明在这一瞬间被别人抢先了
   if (!r.affectedRows) return fail(res, '手慢了，这张工单刚被别人接取')
+  // 接单 = 开始处理：响应时间定了，完成时限跟着从这一刻起算
+  await applySla(req.params.id).catch(() => {})
 
   await closeTicketTodos(req.params.id).catch(() => {})
 
@@ -545,15 +570,20 @@ router.post('/:id/complete', asyncHandler(async (req, res) => {
   if (!rows.length) return fail(res, '工单不存在或无权限')
   const ticket = rows[0]
 
-  // 与编辑接口同一条规则：完成时间不能早于发生时间、非法日期按当前时间兜底
+  // 与编辑接口同一条规则：完成时间不能早于发生时间、非法日期按当前时间兜底；
+  // 还要夹到接单时间之后 —— 处理耗时 = 结束 - 接单，结束早于接单会算出负数
   const nf = normalizeTimes({ happen_time: ticket.happen_time, finish_time: safeDate(finish_time), status: 'done' })
-  const finishAt = nf.finish_time || nowStr()
+  let finishAt = nf.finish_time || nowStr()
+  if (ticket.respond_time && String(finishAt) < String(ticket.respond_time)) finishAt = ticket.respond_time
 
   await query(
     `UPDATE ticket SET status = 'done', finish_time = ?, handle_desc = ?,
        respond_time = COALESCE(respond_time, ?) WHERE ticket_id = ?`,
-    [finishAt, handle_desc ?? ticket.handle_desc, ticket.respond_time || nowStr(), ticketId]
+    [finishAt, handle_desc ?? ticket.handle_desc, ticket.respond_time || finishAt, ticketId]
   )
+  // 完成时限缺失（历史单 / 当时没有策略）才补算；已有值不动，
+  // 否则「先接单后完成」的单会因为响应时间被补记而把完成时限推后，超时记录被抹掉
+  if (!ticket.sla_resolve_due) await applySla(ticketId).catch(() => {})
   // 完成后关掉相关待办提醒，并实时同步给其他运维
   await closeTicketTodos(ticketId).catch(() => {})
   rt.broadcast('ticket:done', { ticket_id: Number(ticketId) })

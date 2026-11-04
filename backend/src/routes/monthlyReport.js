@@ -37,7 +37,7 @@ async function buildStats(userId, month) {
             SUM(status='done') AS done_cnt,
             ROUND(AVG(CASE WHEN status='done' AND finish_time IS NOT NULL AND happen_time IS NOT NULL
                       AND finish_time > happen_time
-                      THEN TIMESTAMPDIFF(MINUTE, happen_time, finish_time) END)/60, 1) AS avg_hours
+                      THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) END)/60, 1) AS avg_hours
      FROM ticket WHERE user_id = ? AND DATE_FORMAT(happen_time,'%Y-%m') = ?`,
     [userId, month]
   )

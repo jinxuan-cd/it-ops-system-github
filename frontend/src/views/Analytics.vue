@@ -63,7 +63,7 @@
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :md="4">
-        <div class="metric-card purple">
+        <div class="metric-card purple" title="口径：接单时间 → 完成时间；未接单直接完成的按发生时间起算">
           <div class="m-val">{{ m.avg_hours === null ? '—' : m.avg_hours }}<small v-if="m.avg_hours !== null"> h</small></div>
           <div class="m-label">平均处理时长 · {{ m.avg_hours === null ? '本期无起止时间完整的工单' : '较' + (data.prev_label || '上期') + ' ' + hoursDiffText }}</div>
         </div>

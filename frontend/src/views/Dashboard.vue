@@ -61,7 +61,7 @@
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :md="4">
-        <div class="metric-card purple" :title="m.sample ? `按本期完成的 ${m.sample} 条有完整起止时间的工单统计` : '本期没有起止时间完整的已完成工单'">
+        <div class="metric-card purple" :title="m.sample ? `按本期完成的 ${m.sample} 条有完整起止时间的工单统计，口径：接单时间 → 完成时间（未接单的按发生时间起算）` : '本期没有起止时间完整的已完成工单'">
           <div class="m-val">{{ m.avg_hours === null ? '—' : m.avg_hours }}<small v-if="m.avg_hours !== null"> h</small></div>
           <div class="m-label">平均处理时长<small v-if="m.sample" class="sub">（{{ m.sample }} 单）</small></div>
         </div>

@@ -71,9 +71,15 @@ function addHours(dtStr, hours) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-// 给工单算出两个截止时间（创建 / 修改问题类别时调用）
+// 给工单算出两个截止时间（创建 / 接单 / 派单 / 修改类别时调用）
 /**
- * 按工单的发生时间、类别、优先级推算两个截止时间。
+ * 按工单的发生时间、接单时间、类别、优先级推算两个截止时间。
+ *
+ * 口径（2026-11 起，两段式）：
+ * · 响应时限 = 发生时间 + respond_hours —— 报障后多久必须有人接单/被派单；
+ * · 完成时限 = **接单时间** + resolve_hours —— 接单即开始处理，24 小时完成是「接单后 24 小时」。
+ *   还没接单时用发生时间兜底，保证「一直没人接」的单也能看出早就该解决；
+ *   一旦接单就重算，把等待接单的时间从处理时限里剔除，工程师不会被前面的排队拖累。
  *
  * 以 happen_time 而非 create_time 为基准：补录的历史工单发生时间可能早于录入时间，
  * 用录入时间算会把已经超期的单显示成未超期。
@@ -81,16 +87,35 @@ function addHours(dtStr, hours) {
  * @param {string} happenTime 发生时间
  * @param {string} problemType 问题类别
  * @param {string} [priority] 优先级
+ * @param {string} [respondTime] 接单/派单时间（= 开始处理时间），未接单传 null
  * @returns {Promise<{sla_respond_due:string|null, sla_resolve_due:string|null}>}
  * @sideeffect 每次调用都会查一次策略表（不缓存），改完策略即刻生效
  */
-async function computeDue(happenTime, problemType, priority) {
+async function computeDue(happenTime, problemType, priority, respondTime) {
   const policies = await loadPolicies()
   const pol = pickPolicy(policies, problemType, priority)
+  // 完成时限的起算点：接过单就从接单起算，没接过单退回发生时间
+  const resolveBase = respondTime || happenTime
   return {
     sla_respond_due: addHours(happenTime, pol.respond_hours),
-    sla_resolve_due: addHours(happenTime, pol.resolve_hours)
+    sla_resolve_due: addHours(resolveBase, pol.resolve_hours)
   }
+}
+
+/**
+ * 两个时间点之间的小时数（保留 1 位小数），用于响应耗时 / 处理耗时 / 总耗时。
+ * 任一缺失或非法都返回 null —— 宁可不显示，也不要编出一个 0 小时。
+ *
+ * @param {string} from 起始时间 'YYYY-MM-DD HH:mm:ss'
+ * @param {string} to 结束时间
+ * @returns {number|null}
+ */
+function hoursBetween(from, to) {
+  if (!from || !to) return null
+  const a = new Date(String(from).replace(' ', 'T')).getTime()
+  const b = new Date(String(to).replace(' ', 'T')).getTime()
+  if (isNaN(a) || isNaN(b)) return null
+  return Math.round((b - a) / 3600000 * 10) / 10
 }
 
 // 本机时区的当前时间字符串（容器已设 TZ=Asia/Shanghai）
@@ -124,13 +149,18 @@ function localNow() {
  *     会显示「已超时」，与工时统计（只算 finish_time <= sla_resolve_due）自相矛盾。
  *   - 未完成：响应或解决任一段超时就算超时，这是值班最需要看到的提醒。
  * · remain_hours 只对未完成工单给出（负值表示已超期多少小时），已完成时为 null；
- * · respond_late 恒有值，供前端把「响应晚、完成及时」和「按时响应」区分开。
+ * · respond_late 恒有值，供前端把「响应晚、完成及时」和「按时响应」区分开；
+ * · 另外给出三段耗时（小时，1 位小数），口径统一在这里算，前端只负责显示：
+ *   respond_hours_used = 接单 - 发生（响应耗时，含排队等接单的时间）
+ *   handle_hours       = 完成 - 接单（处理耗时，接单即开始处理）
+ *   total_hours        = 完成 - 发生（总耗时，用户实际等了多久）
  * 所有比较都用 'YYYY-MM-DD HH:mm:ss' 字符串直接比大小（同格式下字典序等价于时间序），
  * 前提是两边都来自同一时区的本地时间串，不能混入 UTC 的 ISO 串。
  *
  * @param {object} row 工单行，需含 status / respond_time / finish_time / sla_*_due
  * @param {string} [nowStr] 当前时间，缺省用 localNow()
- * @returns {{respond_state:string, resolve_state:string, state:string, remain_hours:number|null, respond_late:boolean}}
+ * @returns {{respond_state:string, resolve_state:string, state:string, remain_hours:number|null,
+ *            respond_late:boolean, respond_hours_used:number|null, handle_hours:number|null, total_hours:number|null}}
  *          state 取值 normal / ok / overdue；respond_state 与 resolve_state 取值 ok / overdue / pending
  */
 function slaStateOf(row, nowStr) {
@@ -156,6 +186,14 @@ function slaStateOf(row, nowStr) {
   }
   out.respond_late = out.respond_state === 'overdue'
 
+  // 三段耗时：接单前只有「响应耗时」，完成后三段齐全
+  out.respond_hours_used = hoursBetween(row.happen_time, row.respond_time)
+  // 未单独接单（响应时间是完成时补记的）算不出处理耗时，给 null 让前端显示「未单独接单」，
+  // 而不是显示一个误导性的 0 分钟
+  const sameInstant = row.respond_time && row.finish_time && String(row.respond_time) === String(row.finish_time)
+  out.handle_hours = sameInstant ? null : hoursBetween(row.respond_time, row.finish_time)
+  out.total_hours = hoursBetween(row.happen_time, row.finish_time)
+
   if (done) {
     // 已完成：超时只由「解决」一段决定（与看板/团队分析的达成率口径一致）
     out.state = out.resolve_state === 'overdue' ? 'overdue' : 'ok'
@@ -165,23 +203,29 @@ function slaStateOf(row, nowStr) {
   return out
 }
 
-// 给单条工单回填 SLA 截止时间（创建 / 修改类别 / 导入后调用）
+// 给单条工单回填 SLA 截止时间（创建 / 接单 / 派单 / 修改类别后调用）
 /**
  * 为单条工单重算并写入 SLA 截止时间。
+ *
+ * 会一并读取 respond_time：完成时限按「接单时间」起算（没接单则退回发生时间），
+ * 因此**接单、派单成功后必须调一次**，否则完成时限还停留在按发生时间算的旧值。
  *
  * @param {number} ticketId 工单 ID
  * @returns {Promise<void>}
  * @sideeffect 直接更新 ticket 两列，调用后需要重新查库才能看到最新值
  *
- * 触发时机必须覆盖「改类别」「改优先级」：改了类别但没重算，
- * 会出现换了更严的策略而截止时间还停留在旧值的错账。
+ * 触发时机必须覆盖「改类别」「改优先级」「改发生时间」「接单/派单」：
+ * 少一处就会出现换了策略/接了单而截止时间还是旧值的错账。
  */
 async function applySla(ticketId) {
-  const rows = await query('SELECT happen_time, problem_type, priority FROM ticket WHERE ticket_id = ?', [ticketId])
+  const rows = await query('SELECT happen_time, problem_type, priority, respond_time, finish_time FROM ticket WHERE ticket_id = ?', [ticketId])
   if (!rows.length) return
   const t = rows[0]
   if (!t.happen_time) return
-  const due = await computeDue(t.happen_time, t.problem_type, t.priority)
+  // 起算点判断：只有「真正接过单」（响应时间早于完成时间）才从接单起算。
+  // 未接单、直接被完成的单，respond_time 是完成时补记的，拿它当基线会让完成时限永远不到期。
+  const claimed = t.respond_time && (!t.finish_time || String(t.respond_time) < String(t.finish_time))
+  const due = await computeDue(t.happen_time, t.problem_type, t.priority, claimed ? t.respond_time : null)
   await query(
     'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
     [due.sla_respond_due, due.sla_resolve_due, ticketId]
@@ -203,15 +247,17 @@ async function backfillSla() {
   let total = 0
   for (;;) {
     const rows = await query(
-      'SELECT ticket_id, happen_time, problem_type, priority FROM ticket WHERE happen_time IS NOT NULL AND sla_resolve_due IS NULL LIMIT 5000'
+      'SELECT ticket_id, happen_time, problem_type, priority, respond_time FROM ticket WHERE happen_time IS NOT NULL AND sla_resolve_due IS NULL LIMIT 5000'
     )
     if (!rows.length) break
     const policies = await loadPolicies()
     for (const t of rows) {
       const pol = pickPolicy(policies, t.problem_type, t.priority)
+      // 与 computeDue 保持同一口径：完成时限从接单时间起算，没接单退回发生时间
+      const base = t.respond_time || t.happen_time
       await query(
         'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
-        [addHours(t.happen_time, pol.respond_hours), addHours(t.happen_time, pol.resolve_hours), t.ticket_id]
+        [addHours(t.happen_time, pol.respond_hours), addHours(base, pol.resolve_hours), t.ticket_id]
       )
     }
     total += rows.length
@@ -220,4 +266,44 @@ async function backfillSla() {
   return total
 }
 
-module.exports = { loadPolicies, pickPolicy, computeDue, slaStateOf, addHours, applySla, backfillSla, localNow, DEFAULT_POLICY }
+/**
+ * 按当前策略重算「已接过单」的工单完成时限。
+ *
+ * 用途：2026-11 把完成时限的起算点从「发生时间」改成「接单时间」后，
+ * 存量工单里凡是有 respond_time 的，旧时限都偏早，会导致接单前排队久的单被误判完成超时。
+ * 只动接了单的行，未接单的行本来就是按发生时间算的，无需变更。
+ *
+ * @param {number} [batch=1000] 每批处理条数
+ * @returns {Promise<number>} 重算的工单数
+ * @sideeffect 批量 UPDATE；启动迁移时调用一次，管理员点「重算」时走另一条全量路径
+ */
+async function realignResolveFromRespond(batch = 1000) {
+  let total = 0
+  let lastId = 0
+  const policies = await loadPolicies()
+  for (;;) {
+    const rows = await query(
+      `SELECT ticket_id, happen_time, problem_type, priority, respond_time FROM ticket
+       WHERE ticket_id > ? AND respond_time IS NOT NULL AND happen_time IS NOT NULL
+       ORDER BY ticket_id LIMIT ${Number(batch)}`,
+      [lastId]
+    )
+    if (!rows.length) break
+    for (const t of rows) {
+      const pol = pickPolicy(policies, t.problem_type, t.priority)
+      await query(
+        'UPDATE ticket SET sla_respond_due = ?, sla_resolve_due = ? WHERE ticket_id = ?',
+        [addHours(t.happen_time, pol.respond_hours), addHours(t.respond_time, pol.resolve_hours), t.ticket_id]
+      )
+    }
+    lastId = rows[rows.length - 1].ticket_id
+    total += rows.length
+    if (rows.length < batch) break
+  }
+  return total
+}
+
+module.exports = {
+  loadPolicies, pickPolicy, computeDue, slaStateOf, addHours, applySla,
+  backfillSla, realignResolveFromRespond, hoursBetween, localNow, DEFAULT_POLICY
+}

@@ -310,10 +310,43 @@ async function migrateModules() {
   // 工单流转：服务台是可选角色。默认 0 = 不开服务台，新工单直接通知全部运维抢单
   if ((await settingGet('service_desk_enable')) === null) await settingSet('service_desk_enable', '0')
 
+  // 2026-11：早期 init.sql 预置了 4 条按优先级收紧的策略（低 2h/普通 1h/高 0.5h/紧急 0.5h），
+  // 和用户以为的「4 小时响应 / 24 小时完成」直接打架：工单会命中精确行，显示「已超时」，
+  // 而设置页最显眼的那条默认策略其实没被用上。
+  // 只有在策略表仍是这 4 条原样默认值时才收敛成一条默认策略；用户自己改过的行一律不动。
+  if (!(await metaDone('migr_20261104_sla_default_collapse'))) {
+    const rows = await query('SELECT problem_type, priority, respond_hours, resolve_hours FROM sla_policy ORDER BY policy_id')
+    const legacy = [
+      ['*', 'low', 2, 24], ['*', 'normal', 1, 24], ['*', 'high', 0.5, 4], ['*', 'urgent', 0.5, 2]
+    ]
+    const untouched = rows.length === 4 && rows.every((r, i) =>
+      r.problem_type === legacy[i][0] && r.priority === legacy[i][1] &&
+      Number(r.respond_hours) === legacy[i][2] && Number(r.resolve_hours) === legacy[i][3])
+    if (untouched) {
+      await query('DELETE FROM sla_policy')
+      await query(
+        `INSERT INTO sla_policy (problem_type, priority, respond_hours, resolve_hours, remark)
+         VALUES ('*', NULL, 4, 24, '默认策略：4 小时内响应，接单后 24 小时内解决')`
+      )
+      console.log('[migrate] 已将 4 条按优先级的旧默认策略收敛为一条默认策略（4h 响应 / 接单后 24h 解决）')
+    }
+    await markMeta('migr_20261104_sla_default_collapse')
+  }
+
   // 历史工单回填 SLA 截止时间（只补空的，不会覆盖已算好的）
   const { backfillSla } = require('./sla')
   const n = await backfillSla()
   if (n) console.log(`[migrate] 已为 ${n} 条历史工单回填 SLA 截止时间`)
+
+  // 2026-11：完成时限的起算点从「发生时间」改为「接单时间」（接单即开始处理），
+  // 已接过单的存量工单按新口径重算一次，否则排队久的单会被误判完成超时。
+  // 用 meta 标记保证只跑一次，管理员后续点「重算」仍可随时再对齐。
+  if (!(await metaDone('migr_20261104_sla_from_respond'))) {
+    const { realignResolveFromRespond } = require('./sla')
+    const rn = await realignResolveFromRespond()
+    if (rn) console.log(`[migrate] 已按接单时间重算 ${rn} 条工单的完成时限`)
+    await markMeta('migr_20261104_sla_from_respond')
+  }
 
   // 常见问题自助门户：把已有完整「现象 + 解决方案」的知识条目标记为对外公开，
   // 否则自助门户首次打开是空的。管理员可在知识库里逐条/批量关闭。

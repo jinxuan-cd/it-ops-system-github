@@ -207,7 +207,17 @@
         <el-descriptions-item label="负责人">{{ detail.assignee_name || '未分配' }}</el-descriptions-item>
         <el-descriptions-item label="指派时间">{{ detail.assign_time || '—' }}</el-descriptions-item>
         <el-descriptions-item label="完成时间">{{ detail.finish_time || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="响应时间">{{ detail.respond_time || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="接单时间（响应）">{{ detail.respond_time || '未接单' }}</el-descriptions-item>
+        <!-- 耗时三段分开显示：响应耗时（发生→接单）、处理耗时（接单→结束）、总耗时（发生→结束） -->
+        <el-descriptions-item label="处理耗时">
+          <span v-if="detail.handle_hours != null">{{ fmtHours(detail.handle_hours) }}</span>
+          <span v-else class="muted">{{ detail.status === 'done' ? '未单独接单，按总耗时计' : '未完成' }}</span>
+          <span v-if="detail.respond_hours_used != null" class="sla-detail">响应耗时 {{ fmtHours(detail.respond_hours_used) }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="总耗时">
+          <span v-if="detail.total_hours != null">{{ fmtHours(detail.total_hours) }}</span>
+          <span v-else class="muted">未完成</span>
+        </el-descriptions-item>
         <!-- 时效单独占一行：应响应/应解决/实际时间 + 命中的策略，超时争议时能当场核对 -->
         <el-descriptions-item label="时效" :span="2">
           <el-tag size="small" :type="slaType(detail)">{{ slaText(detail) }}</el-tag>
@@ -264,9 +274,10 @@
         <el-form-item label="问题类别"><el-select v-model="editForm.problem_type" filterable style="width:100%"><el-option v-for="d in dicts.problem_type" :key="d.dict_id" :label="d.dict_label" :value="d.dict_label" /></el-select></el-form-item>
         <el-form-item label="服务内容"><el-input v-model="editForm.service_content" type="textarea" :rows="2" /></el-form-item>
         <!-- 完成时间与状态双向联动：
-             选「已完成」自动补当前时间；清空完成时间则状态回落为处理中（见 onEditStatusChange / onEditFinishChange） -->
-        <el-form-item label="完成时间">
+             选「已完成」自动补当前时间（作为结束时间）；清空完成时间则状态回落为处理中 -->
+        <el-form-item label="结束时间">
           <el-date-picker v-model="editForm.finish_time" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" @change="onEditFinishChange" />
+          <div class="form-hint">填完即「处理结束」，处理耗时按「结束时间 − 接单时间」计算</div>
         </el-form-item>
         <el-form-item label="处理说明"><el-input v-model="editForm.handle_desc" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="优先级">
@@ -536,8 +547,15 @@ function slaType(row) {
   return 'info'
 }
 function slaText(row) {
-  if (row.state === 'overdue') return '已超时'
-  if (row.status === 'done') return row.respond_late ? '响应晚' : '按时完成'
+  const desk = workflow.service_desk_enable
+  if (row.status === 'done') {
+    if (row.state === 'overdue') return '已超时'
+    return row.respond_late ? '响应晚' : '按时完成'
+  }
+  // 未完成时把两段分开说：开服务台时响应=派单（服务台的责任），关服务台时响应=接单（全员的责任）
+  if (row.resolve_state === 'overdue') return '完成超时'
+  if (row.respond_state === 'overdue') return desk ? '派单超时' : '接单超时'
+  if (row.status === 'pending') return desk ? '待指派' : '待接单'
   if (row.remain_hours != null && row.remain_hours <= 4) return '即将超时'
   return '进行中'
 }
@@ -546,10 +564,17 @@ function slaText(row) {
 function slaTip(row) {
   const parts = []
   if (row.sla_respond_due) parts.push(`应响应：${String(row.sla_respond_due).slice(5, 16)}`)
-  if (row.respond_time) parts.push(`实际响应：${String(row.respond_time).slice(5, 16)}`)
+  if (row.respond_time) parts.push(`接单：${String(row.respond_time).slice(5, 16)}`)
   if (row.sla_resolve_due) parts.push(`应解决：${String(row.sla_resolve_due).slice(5, 16)}`)
-  if (row.finish_time) parts.push(`实际完成：${String(row.finish_time).slice(5, 16)}`)
+  if (row.finish_time) parts.push(`完成：${String(row.finish_time).slice(5, 16)}`)
   if (row.remain_hours != null && row.status !== 'done') parts.push(`剩余 ${row.remain_hours} 小时`)
+  // 未完成的超时说清楚卡在哪一段：服务台模式下是没人派单，抢单模式下是没人接单
+  if (row.status !== 'done' && row.respond_state === 'overdue' && row.resolve_state !== 'overdue') {
+    parts.push(workflow.service_desk_enable ? '（服务台尚未派单，已超过响应时限）' : '（尚无人接单，已超过响应时限）')
+  }
+  // 耗时口径：接单才算开始处理，处理耗时 = 结束 - 接单；总耗时 = 结束 - 发生
+  if (row.handle_hours != null) parts.push(`处理耗时 ${fmtHours(row.handle_hours)}`)
+  else if (row.total_hours != null) parts.push(`总耗时 ${fmtHours(row.total_hours)}`)
   // 直接完成、没走过接单/派单的单子，后端会把响应时间补成完成时间，
   // 这时「响应晚」只是推导结果，不是真的拖了接单，提示里要说清楚
   if (row.status === 'done' && row.respond_time && row.finish_time && String(row.respond_time) === String(row.finish_time)) {
@@ -559,6 +584,13 @@ function slaTip(row) {
     parts.push('（响应晚于时限，但完成未超时）')
   }
   return parts.join('　') || '未设置时效策略'
+}
+// 小时数转「X.X 小时」，不足 1 小时折算成分钟，值班时看「25 分钟」比「0.4 小时」直观
+function fmtHours(h) {
+  if (h == null) return '—'
+  const v = Number(h)
+  if (Math.abs(v) < 1) return `${Math.round(v * 60)} 分钟`
+  return `${v} 小时`
 }
 // 命中的策略原文：类别/优先级为 * 与空时说明是兜底策略，
 // 否则用户会以为「我设了 4h 怎么按 2h 算」——其实是另一条更精确的行在生效
@@ -851,6 +883,7 @@ onUnmounted(() => {
 .ticket-table-card :deep(.col-ops .el-button) { padding: 0 2px; margin-left: 0; }
 
 .status-hint { margin-left: 10px; font-size: 12px; color: var(--it-text-sub); }
+.form-hint { font-size: 12px; color: var(--it-text-sub); margin-top: 2px; line-height: 1.5; }
 
 /* 详情弹窗底部：左侧接单/派单/退回，右侧关闭 */
 .detail-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
