@@ -26,6 +26,7 @@
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:14px">
       <template #title>
         匹配优先级：问题类别 + 优先级精确匹配 &gt; 仅问题类别 &gt; 默认策略（*）。未单独配置的类别一律走默认策略。
+        工单详情页会显示该单实际命中的策略，超时判定和你预期不一致时先看那里。
       </template>
     </el-alert>
 
@@ -145,6 +146,15 @@ async function onSave() {
     ElMessage.success('已保存')
     formVisible.value = false
     load()
+    // 改完策略不重算，存量工单还按旧时限判定，正是「我设成 4 小时怎么还按 2 小时算超时」的来源。
+    // 这里直接问一句，比让用户自己去点按钮可靠。
+    try {
+      await ElMessageBox.confirm(
+        '策略已保存。已产生的工单仍按旧时限计算，需要按新策略重算一遍才会更新超时标记，现在重算吗？',
+        '重算历史工单', { type: 'info', confirmButtonText: '立即重算', cancelButtonText: '稍后手动重算' }
+      )
+      await onRecalc()
+    } catch { /* 用户选择稍后 */ }
   } catch (e) { ElMessage.error(e.message) } finally { saving.value = false }
 }
 // 删除策略。先确认再删——删掉后该类别工单会回落到更低优先级的策略（最终是 *），

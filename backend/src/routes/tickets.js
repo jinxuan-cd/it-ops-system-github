@@ -18,7 +18,7 @@ const { query } = require('../db')
 const { ok, fail, asyncHandler, safeJson } = require('../utils/helpers')
 const { auth, adminOnly, isViewAll } = require('../middleware/auth')
 const { upload } = require('../middleware/upload')
-const { applySla, slaStateOf, backfillSla } = require('../utils/sla')
+const { applySla, slaStateOf, backfillSla, loadPolicies, pickPolicy } = require('../utils/sla')
 const { broadcast } = require('../utils/notifier')
 const { dispatchTicket, closeTicketTodos } = require('../utils/dispatch')
 const rt = require('../utils/realtime')
@@ -266,6 +266,17 @@ router.get('/:id', asyncHandler(async (req, res) => {
   if (!allowed) return fail(res, '工单不存在或无权限')
   t.attachment = safeJson(t.attachment) || []
   Object.assign(t, slaStateOf(t))
+  // 附上命中的策略原文：用户看到「已超时」时能立刻知道是按哪条时限算的
+  // （例如紧急类单独配了 2h 响应，光看应响应时间点看不出是策略差异引起的）
+  try {
+    const pol = pickPolicy(await loadPolicies(), t.problem_type, t.priority)
+    t.sla_policy = {
+      problem_type: pol.problem_type || '*',
+      priority: pol.priority || '',
+      respond_hours: Number(pol.respond_hours),
+      resolve_hours: Number(pol.resolve_hours)
+    }
+  } catch { /* 策略表读取失败不影响详情展示 */ }
   ok(res, t)
 }))
 

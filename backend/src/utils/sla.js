@@ -115,38 +115,53 @@ function localNow() {
 /**
  * 计算单条工单的 SLA 展示状态。
  *
- * 判定口径：
+ * 判定口径（2026-11 修正）：
  * · respond：已有 respond_time 就按「实际响应 vs 应响应」比，没有才用当前时间判是否已超期；
  * · resolve：已完成且有时间按「完成 vs 应解决」比，未完成用当前时间判；
+ * · **整单 state 的口径按状态分开**：
+ *   - 已完成：只看「完成是否超过应解决时间」。响应段晚了用 respond_late 单独标记，
+ *     不再让整单标红 —— 否则「2 小时就做完了」却因为自动补记的响应时间过了响应时限，
+ *     会显示「已超时」，与工时统计（只算 finish_time <= sla_resolve_due）自相矛盾。
+ *   - 未完成：响应或解决任一段超时就算超时，这是值班最需要看到的提醒。
  * · remain_hours 只对未完成工单给出（负值表示已超期多少小时），已完成时为 null；
- * · 汇总 state 里 overdue 优先于 ok，只要任一段超时整单就算超时。
+ * · respond_late 恒有值，供前端把「响应晚、完成及时」和「按时响应」区分开。
  * 所有比较都用 'YYYY-MM-DD HH:mm:ss' 字符串直接比大小（同格式下字典序等价于时间序），
  * 前提是两边都来自同一时区的本地时间串，不能混入 UTC 的 ISO 串。
  *
  * @param {object} row 工单行，需含 status / respond_time / finish_time / sla_*_due
  * @param {string} [nowStr] 当前时间，缺省用 localNow()
- * @returns {{respond_state:string, resolve_state:string, state:string, remain_hours:number|null}}
+ * @returns {{respond_state:string, resolve_state:string, state:string, remain_hours:number|null, respond_late:boolean}}
  *          state 取值 normal / ok / overdue；respond_state 与 resolve_state 取值 ok / overdue / pending
  */
 function slaStateOf(row, nowStr) {
   const now = nowStr || localNow()
   const done = row.status === 'done'
-  const out = { respond_state: 'pending', resolve_state: 'pending', state: 'normal', remain_hours: null }
+  const out = { respond_state: 'pending', resolve_state: 'pending', state: 'normal', remain_hours: null, respond_late: false }
 
   if (row.sla_respond_due) {
     if (row.respond_time) out.respond_state = String(row.respond_time) <= String(row.sla_respond_due) ? 'ok' : 'overdue'
     else out.respond_state = String(now) > String(row.sla_respond_due) ? 'overdue' : 'pending'
   }
   if (row.sla_resolve_due) {
-    if (done && row.finish_time) out.resolve_state = String(row.finish_time) <= String(row.sla_resolve_due) ? 'ok' : 'overdue'
-    else out.resolve_state = String(now) > String(row.sla_resolve_due) ? 'overdue' : 'pending'
-    if (!done) {
-      const ms = new Date(String(row.sla_resolve_due).replace(' ', 'T')).getTime() - Date.now()
+    if (done) {
+      // 完成时间缺失的老数据不判超时：没有依据就不能给红牌
+      out.resolve_state = row.finish_time
+        ? (String(row.finish_time) <= String(row.sla_resolve_due) ? 'ok' : 'overdue')
+        : 'pending'
+    } else {
+      out.resolve_state = String(now) > String(row.sla_resolve_due) ? 'overdue' : 'pending'
+      const ms = new Date(String(row.sla_resolve_due).replace(' ', 'T')).getTime() - new Date(String(now).replace(' ', 'T')).getTime()
       out.remain_hours = Math.round(ms / 3600000 * 10) / 10
     }
   }
-  if (out.respond_state === 'overdue' || out.resolve_state === 'overdue') out.state = 'overdue'
-  else if (done) out.state = 'ok'
+  out.respond_late = out.respond_state === 'overdue'
+
+  if (done) {
+    // 已完成：超时只由「解决」一段决定（与看板/团队分析的达成率口径一致）
+    out.state = out.resolve_state === 'overdue' ? 'overdue' : 'ok'
+  } else if (out.respond_state === 'overdue' || out.resolve_state === 'overdue') {
+    out.state = 'overdue'
+  }
   return out
 }
 

@@ -206,7 +206,16 @@
         </el-descriptions-item>
         <el-descriptions-item label="负责人">{{ detail.assignee_name || '未分配' }}</el-descriptions-item>
         <el-descriptions-item label="指派时间">{{ detail.assign_time || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="完成时间" :span="2">{{ detail.finish_time || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="完成时间">{{ detail.finish_time || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="响应时间">{{ detail.respond_time || '—' }}</el-descriptions-item>
+        <!-- 时效单独占一行：应响应/应解决/实际时间 + 命中的策略，超时争议时能当场核对 -->
+        <el-descriptions-item label="时效" :span="2">
+          <el-tag size="small" :type="slaType(detail)">{{ slaText(detail) }}</el-tag>
+          <span class="sla-detail">{{ slaTip(detail) }}</span>
+          <div v-if="detail.sla_policy" class="sla-policy">
+            应用策略：{{ policyText(detail.sla_policy) }}
+          </div>
+        </el-descriptions-item>
         <el-descriptions-item label="服务内容" :span="2">{{ detail.service_content }}</el-descriptions-item>
         <el-descriptions-item label="处理说明" :span="2">{{ detail.handle_desc }}</el-descriptions-item>
         <el-descriptions-item label="附件" :span="2">
@@ -518,28 +527,45 @@ const PRI = { urgent: '紧急', high: '高', normal: '普通', low: '低' }
 function priLabel(p) { return PRI[p] || '普通' }
 function priType(p) { return p === 'urgent' ? 'danger' : p === 'high' ? 'warning' : p === 'low' ? 'info' : 'primary' }
 
-// SLA 时效：state=overdue 的判断放在「已完成」之前，
-// 所以超时后才完成的单子仍显示红色「已超时」，不会被成功色盖掉
+// SLA 时效：已完成工单的「已超时」只看完成是否超过解决时限（与工时统计口径一致），
+// 响应晚了但完成及时的单子单独用「响应晚」标出来，不再误判成整单超时
 function slaType(row) {
   if (row.state === 'overdue') return 'danger'
-  if (row.status === 'done') return 'success'
+  if (row.status === 'done') return row.respond_late ? 'warning' : 'success'
   if (row.remain_hours != null && row.remain_hours <= 4) return 'warning'
   return 'info'
 }
 function slaText(row) {
   if (row.state === 'overdue') return '已超时'
-  if (row.status === 'done') return '按时完成'
+  if (row.status === 'done') return row.respond_late ? '响应晚' : '按时完成'
   if (row.remain_hours != null && row.remain_hours <= 4) return '即将超时'
   return '进行中'
 }
-// 悬浮提示里补上应响应/应解决的时间点与剩余小时，
-// 光看「即将超时」不知道还差多久，值班时需要具体时间
+// 悬浮提示里补上应响应/应解决/实际时间点与剩余小时，
+// 光看「即将超时」不知道还差多久，值班时需要具体时间；对不上时也能一眼看出差在哪一段
 function slaTip(row) {
   const parts = []
   if (row.sla_respond_due) parts.push(`应响应：${String(row.sla_respond_due).slice(5, 16)}`)
+  if (row.respond_time) parts.push(`实际响应：${String(row.respond_time).slice(5, 16)}`)
   if (row.sla_resolve_due) parts.push(`应解决：${String(row.sla_resolve_due).slice(5, 16)}`)
+  if (row.finish_time) parts.push(`实际完成：${String(row.finish_time).slice(5, 16)}`)
   if (row.remain_hours != null && row.status !== 'done') parts.push(`剩余 ${row.remain_hours} 小时`)
+  // 直接完成、没走过接单/派单的单子，后端会把响应时间补成完成时间，
+  // 这时「响应晚」只是推导结果，不是真的拖了接单，提示里要说清楚
+  if (row.status === 'done' && row.respond_time && row.finish_time && String(row.respond_time) === String(row.finish_time)) {
+    parts.push('（未单独接单，响应时间按完成时间计）')
+  }
+  if (row.status === 'done' && row.respond_late && row.state !== 'overdue') {
+    parts.push('（响应晚于时限，但完成未超时）')
+  }
   return parts.join('　') || '未设置时效策略'
+}
+// 命中的策略原文：类别/优先级为 * 与空时说明是兜底策略，
+// 否则用户会以为「我设了 4h 怎么按 2h 算」——其实是另一条更精确的行在生效
+function policyText(p) {
+  const scope = (p.problem_type === '*' ? '默认策略' : p.problem_type) +
+    (p.priority ? ' · ' + ({ urgent: '紧急', high: '高', normal: '普通', low: '低' }[p.priority] || p.priority) : ' · 不限优先级')
+  return `${scope}（${p.respond_hours} 小时响应 / ${p.resolve_hours} 小时解决）`
 }
 
 // 派单 / 转单
@@ -770,6 +796,9 @@ onUnmounted(() => {
 .batch-count b { color: var(--it-primary); font-size: 15px; margin: 0 2px; }
 .batch-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .muted { color: var(--it-text-sub); }
+/* 详情里的时效说明：与标签同一行，换行时自然折到下一行 */
+.sla-detail { font-size: 12px; color: var(--it-text-sub); margin-left: 8px; }
+.sla-policy { font-size: 12px; color: var(--it-text-sub); margin-top: 4px; }
 .assign-ticket { font-size: 13px; line-height: 1.6; color: var(--it-text); }
 @media (max-width: 900px) {
   .batch-bar { flex-direction: column; align-items: stretch; }
