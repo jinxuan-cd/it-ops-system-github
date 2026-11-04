@@ -682,9 +682,17 @@ async function loadPoolCount() {
 }
 
 // 列表行直接复用做详情展示；由 URL 跳进来的才走 openDetailById 拉完整数据
-function openDetail(row) {
-  detail.value = row
-  detailVisible.value = true
+// 打开详情统一走接口：列表行只有 slaStateOf 算出的状态与耗时，
+// 命中的 SLA 策略（sla_policy）只有详情接口才返回，直接拿行数据会让「应用策略」空白
+async function openDetail(row) {
+  try {
+    detail.value = await R.getTicket(row.ticket_id)
+    detailVisible.value = true
+  } catch (e) {
+    // 接口失败（如刚好被删）退回用列表行，至少还能看到主要内容
+    detail.value = row
+    detailVisible.value = true
+  }
 }
 // 从待办 / 右下角提醒跳过来：&open=<id> 直接打开详情
 async function openDetailById(id) {
