@@ -90,7 +90,7 @@ router.get('/', asyncHandler(async (req, res) => {
       (SELECT COUNT(*) FROM ticket WHERE YEARWEEK(happen_time,1)=YEARWEEK(CURDATE(),1)-1 ${scT}) AS last_week_ticket,
       (SELECT COUNT(*) FROM ticket WHERE DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') ${scT}) AS month_ticket,
       (SELECT COUNT(*) FROM ticket WHERE DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(DATE_SUB(CURDATE(),INTERVAL 1 MONTH),'%Y-%m') ${scT}) AS last_month_ticket,
-      (SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE,COALESCE(respond_time,happen_time),finish_time))/60,1) FROM ticket WHERE status='done' AND happen_time IS NOT NULL AND finish_time IS NOT NULL AND finish_time > happen_time AND DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') ${scT}) AS avg_handle_hours,
+      (SELECT ROUND(AVG(TIMESTAMPDIFF(MINUTE,COALESCE(accept_time,happen_time),finish_time))/60,1) FROM ticket WHERE status='done' AND happen_time IS NOT NULL AND finish_time IS NOT NULL AND finish_time > happen_time AND DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') ${scT}) AS avg_handle_hours,
       (SELECT COUNT(*) FROM ticket WHERE status='done' AND finish_time > happen_time AND DATE_FORMAT(happen_time,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') ${scT}) AS handle_sample,
       (SELECT COUNT(*) FROM month_goal WHERE is_finish=1 AND goal_month = DATE_FORMAT(CURDATE(),'%Y-%m') ${sc}) AS goal_done,
       (SELECT COUNT(*) FROM month_goal WHERE goal_month = DATE_FORMAT(CURDATE(),'%Y-%m') ${sc}) AS goal_total
@@ -274,7 +274,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
          COUNT(*) AS accepted,
          SUM(status = 'done') AS closed,
          ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND finish_time > happen_time
-                        THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
+                        THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
          SUM(CASE WHEN status = 'done' AND sla_resolve_due IS NOT NULL AND finish_time > sla_resolve_due
                   THEN 1 ELSE 0 END) AS sla_overdue,
          ROUND(AVG(satisfy_score), 2) AS satisfy_avg,
@@ -315,7 +315,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
     const rows = await query(
       `SELECT DATE_FORMAT(happen_time, '%m') AS m, COUNT(*) AS c,
               ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND finish_time > happen_time
-                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS h
+                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS h
        FROM ticket WHERE YEAR(happen_time) = ? ${sc.sql}
        GROUP BY DATE_FORMAT(happen_time, '%m')`,
       [y, ...sc.params]
@@ -475,7 +475,7 @@ async function periodStat(start, end, sc) {
     `SELECT COUNT(*) AS done,
             SUM(finish_time > happen_time) AS sample,
             ROUND(AVG(CASE WHEN finish_time > happen_time
-                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
+                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
      FROM ticket
      WHERE status = 'done' AND finish_time IS NOT NULL AND finish_time >= ? AND finish_time < ? ${sc.sql}`,
     [fmtDT(start), fmtDT(end), ...sc.params]
@@ -549,7 +549,7 @@ async function trendOf(start, end, unit, sc) {
   const accRows = await query(
     `SELECT ${accExpr} AS k, COUNT(*) AS c,
             ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND finish_time > happen_time
-                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS h
+                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS h
      FROM ticket WHERE happen_time >= ? AND happen_time < ? ${sc.sql}
      GROUP BY ${accExpr}`,
     [fmtDT(start), fmtDT(end), ...sc.params]

@@ -63,7 +63,7 @@
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :md="4">
-        <div class="metric-card purple" title="口径：接单时间 → 完成时间；未接单直接完成的按发生时间起算">
+        <div class="metric-card purple" title="口径：开始处理时间（首次接单/派单）→ 完结时间；补单未走接单流程的按发生时间起算">
           <div class="m-val">{{ m.avg_hours === null ? '—' : m.avg_hours }}<small v-if="m.avg_hours !== null"> h</small></div>
           <div class="m-label">平均处理时长 · {{ m.avg_hours === null ? '本期无起止时间完整的工单' : '较' + (data.prev_label || '上期') + ' ' + hoursDiffText }}</div>
         </div>
@@ -864,7 +864,7 @@ const brief = computed(() => {
     const bad = Number(sla.sla_overdue_now || 0)
     out.push({
       level: bad > 0 ? 'warn' : '',
-      text: `SLA 达成情况：响应及时率 <b>${sla.respond_rate === null ? '暂无有效样本' : sla.respond_rate + '%'}</b>（${sla.respond_base || 0} 单有接单时间），解决及时率 <b>${sla.resolve_rate === null ? '暂无有效样本' : sla.resolve_rate + '%'}</b>${bad > 0 ? `，当前仍有 <b>${bad}</b> 单已超出约定时限未完成` : '，全部在约定时限内'}。`
+      text: `SLA 达成情况：响应及时率 <b>${sla.respond_rate === null ? '暂无有效样本' : sla.respond_rate + '%'}</b>（${sla.respond_base || 0} 单有响应时间），解决及时率 <b>${sla.resolve_rate === null ? '暂无有效样本' : sla.resolve_rate + '%'}</b>${bad > 0 ? `，当前仍有 <b>${bad}</b> 单已超出约定时限未完成` : '，全部在约定时限内'}。`
     })
   }
 

@@ -28,6 +28,7 @@
             <el-col :span="mode === 'quick' ? 12 : 24">
               <el-form-item label="发生时间" required>
                 <el-date-picker v-model="form.happen_time" type="datetime" placeholder="选择时间" style="width:100%" value-format="YYYY-MM-DD HH:mm:ss" />
+                <div class="pool-tip">补单可填实际发生时刻（可早于现在）。响应时间由系统按录入时刻自动生成，不会用完成时间代替。</div>
               </el-form-item>
             </el-col>
             <el-col :span="mode === 'quick' ? 12 : 12">
@@ -66,8 +67,9 @@
           <template v-if="mode === 'standard'">
             <el-row :gutter="16">
               <el-col :span="12">
-                <el-form-item label="完成时间">
-                  <el-date-picker v-model="form.finish_time" type="datetime" placeholder="完成后填写" style="width:100%" value-format="YYYY-MM-DD HH:mm:ss" />
+                <el-form-item label="结束时间">
+                  <el-date-picker v-model="form.finish_time" type="datetime" placeholder="处理完结时刻" style="width:100%" value-format="YYYY-MM-DD HH:mm:ss" />
+                  <div class="pool-tip">填实际处理完结的时刻。允许早于录入时刻（现场处理完回来补单），不会拿它当响应时间。</div>
                 </el-form-item>
               </el-col>
               <el-col :span="12">

@@ -254,8 +254,9 @@ async function migrateModules() {
     ['priority', "ALTER TABLE ticket ADD COLUMN priority VARCHAR(20) NOT NULL DEFAULT 'normal' COMMENT 'low/normal/high/urgent' AFTER status"],
     ['assignee_id', "ALTER TABLE ticket ADD COLUMN assignee_id INT UNSIGNED NULL COMMENT '指派给谁' AFTER user_id"],
     ['assign_time', "ALTER TABLE ticket ADD COLUMN assign_time DATETIME NULL COMMENT '指派时间' AFTER assignee_id"],
-    ['respond_time', "ALTER TABLE ticket ADD COLUMN respond_time DATETIME NULL COMMENT '首次响应时间' AFTER assign_time"],
-    ['sla_respond_due', "ALTER TABLE ticket ADD COLUMN sla_respond_due DATETIME NULL COMMENT '响应应达时间' AFTER respond_time"],
+    ['respond_time', "ALTER TABLE ticket ADD COLUMN respond_time DATETIME NULL COMMENT '响应时间' AFTER assign_time"],
+    ['accept_time', "ALTER TABLE ticket ADD COLUMN accept_time DATETIME NULL COMMENT '开始处理时间：首次接单/派单，转单不覆盖' AFTER respond_time"],
+    ['sla_respond_due', "ALTER TABLE ticket ADD COLUMN sla_respond_due DATETIME NULL COMMENT '响应应达时间' AFTER accept_time"],
     ['sla_resolve_due', "ALTER TABLE ticket ADD COLUMN sla_resolve_due DATETIME NULL COMMENT '解决应达时间' AFTER sla_respond_due"],
     ['source', "ALTER TABLE ticket ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT 'manual/qr/import' AFTER sync_kb"],
     ['report_no', "ALTER TABLE ticket ADD COLUMN report_no VARCHAR(24) NULL COMMENT '报障单号' AFTER source"],
@@ -314,19 +315,29 @@ async function migrateModules() {
   // 策略表是管理员的自定义配置，按优先级分行配置（低/普通/高/紧急）是完全合法的用法，
   // 自动清表会让别人辛苦配的时限凭空消失。要改口径只能由管理员在页面上改。
 
-  // 历史工单回填 SLA 截止时间（只补空的，不会覆盖已算好的）
   const { backfillSla } = require('./sla')
-  const n = await backfillSla()
-  if (n) console.log(`[migrate] 已为 ${n} 条历史工单回填 SLA 截止时间`)
 
-  // 2026-11：完成时限的起算点从「发生时间」改为「接单时间」（接单即开始处理），
-  // 已接过单的存量工单按新口径重算一次，否则排队久的单会被误判完成超时。
-  // 用 meta 标记保证只跑一次，管理员后续点「重算」仍可随时再对齐。
-  if (!(await metaDone('migr_20261104_sla_from_respond'))) {
-    const { realignResolveFromRespond } = require('./sla')
-    const rn = await realignResolveFromRespond()
-    if (rn) console.log(`[migrate] 已按接单时间重算 ${rn} 条工单的完成时限`)
-    await markMeta('migr_20261104_sla_from_respond')
+  // 2026-11：时间字段模型重做 —— 响应时间 / 开始处理时间 / 发生时间 / 完结时间各自独立。
+  // 旧逻辑把「没接单直接完成」的 respond_time 补成 finish_time，等于拿关单时刻当响应时间；
+  // 这里一次性纠正存量数据，并按「开始处理时间」全量重算一次时限。
+  if (!(await metaDone('migr_20261104_response_time_model'))) {
+    // 1) 首次接单/派单时间：老库只有 assign_time（转单会被覆盖），固化成不随转单变化的首次值
+    const a = await query('UPDATE ticket SET accept_time = assign_time WHERE accept_time IS NULL AND assign_time IS NOT NULL')
+    // 2) 响应时间：有过接单/派单就按接单时间（用户口径）；没有的补录单按录入时刻。
+    //    只处理已完成的单——未完成的「待接单」单保持 NULL，否则会把接单超时提醒抹掉。
+    const r = await query(
+      `UPDATE ticket SET respond_time = COALESCE(assign_time, create_time, happen_time)
+       WHERE finish_time IS NOT NULL
+         AND (respond_time IS NULL OR (respond_time = finish_time AND assign_time IS NULL))`
+    )
+    // 3) 截止时间是派生值，旧口径算出来的全部作废，按当前策略 + 新起算点重算
+    await query('UPDATE ticket SET sla_respond_due = NULL, sla_resolve_due = NULL WHERE happen_time IS NOT NULL')
+    const cnt = await backfillSla()
+    await markMeta('migr_20261104_response_time_model')
+    console.log(`[migrate] 时间口径迁移：回填开始处理 ${a.affectedRows} 条、纠正响应时间 ${r.affectedRows} 条、重算时限 ${cnt} 条`)
+  } else {
+    const n = await backfillSla()
+    if (n) console.log(`[migrate] 已为 ${n} 条历史工单回填 SLA 截止时间`)
   }
 
   // 常见问题自助门户：把已有完整「现象 + 解决方案」的知识条目标记为对外公开，

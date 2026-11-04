@@ -1,7 +1,7 @@
 # =============================================================================
 #  IT 运维工单台账与日报系统 —— 管理端镜像（Node 构建 + Nginx 托管）
 #  -----------------------------------------------------------------------------
-#  作者：锦轩 (JinXuan) <2686389727@qq.com>    版本：1.3.1    创建：2026-10-29
+#  作者：锦轩 (JinXuan) <2686389727@qq.com>    版本：1.4.0    创建：2026-10-29
 #  Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
 #  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
 #        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
@@ -22,7 +22,7 @@ FROM nginx:1.27-alpine
 LABEL maintainer="锦轩 <2686389727@qq.com>" \
       org.opencontainers.image.authors="锦轩 <2686389727@qq.com>" \
       org.opencontainers.image.title="IT 运维工单台账与日报系统 - 管理端" \
-      org.opencontainers.image.version="1.3.1" \
+      org.opencontainers.image.version="1.4.0" \
       org.opencontainers.image.vendor="锦轩 (JinXuan)" \
       org.opencontainers.image.licenses="LicenseRef-ITOps-Source-Available-1.0 (see LICENSE)" \
       org.opencontainers.image.copyright="Copyright (c) 2026 锦轩 (JinXuan). All rights reserved."

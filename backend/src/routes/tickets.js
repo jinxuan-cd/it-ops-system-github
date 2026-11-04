@@ -323,12 +323,16 @@ router.post('/', asyncHandler(async (req, res) => {
   fields.forEach(f => {
     if (b[f] !== undefined) { cols.push(f); vals.push(DATE_FIELDS.includes(f) ? normDate(b[f]) : b[f]) }
   })
-  // 录单时直接指派给自己（方便「我录的我负责」）
+  const createdAt = nowStr()
+  // 响应时间由系统自动生成 = 工单被录入/受理的时刻，绝不从完成时间推导。
+  // 唯一例外是「投入待接单池」：那种单还没人受理，响应时间留空，等接单/派单那一刻写入。
+  if (!toPool) { cols.push('respond_time'); vals.push(createdAt) }
+  // 录单时直接指派给自己（方便「我录的我负责」）：录入即开始处理
   // 注意：assignee_id 可能已由上面 fields 写入，重复 push 会触发 "Column 'assignee_id' specified twice"
   if (req.body.assign_me) {
     if (b.assignee_id === undefined) { cols.push('assignee_id'); vals.push(req.user.user_id) }
-    cols.push('assign_time', 'respond_time')
-    vals.push(nowStr(), nowStr())
+    cols.push('assign_time', 'accept_time')
+    vals.push(createdAt, createdAt)
   }
   if (b.attachment) { cols.push('attachment'); vals.push(JSON.stringify(b.attachment)) }
 
@@ -375,7 +379,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   let oldRow = null
   if (b.happen_time !== undefined || b.finish_time !== undefined || b.status !== undefined) {
     const old = await query(
-      `SELECT happen_time, finish_time, status, respond_time FROM ticket WHERE ticket_id = ? ${sc.clause}`,
+      `SELECT happen_time, finish_time, status, respond_time, accept_time FROM ticket WHERE ticket_id = ? ${sc.clause}`,
       [req.params.id, ...sc.params]
     )
     if (!old.length) return fail(res, '工单不存在或无权限')
@@ -388,9 +392,10 @@ router.put('/:id', asyncHandler(async (req, res) => {
     b.happen_time = fixed.happen_time
     b.finish_time = fixed.finish_time
     if (fixed.status) b.status = fixed.status
-    // 结束时间不能早于接单时间：处理耗时 = 结束 - 接单，倒挂会算出负数
-    if (b.finish_time && old[0].respond_time && String(b.finish_time) < String(old[0].respond_time)) {
-      b.finish_time = old[0].respond_time
+    // 结束时间不能早于「开始处理时间」，否则处理耗时为负。
+    // 补单没有接单流程时 accept_time 为空，此时允许结束时间早于响应时间（先干活、后补单）。
+    if (b.finish_time && old[0].accept_time && String(b.finish_time) < String(old[0].accept_time)) {
+      b.finish_time = old[0].accept_time
     }
   }
 
@@ -402,10 +407,11 @@ router.put('/:id', asyncHandler(async (req, res) => {
   })
   if (b.attachment !== undefined) { sets.push('attachment = ?'); vals.push(JSON.stringify(b.attachment)) }
 
-  // 编辑里直接把状态改成已完成、而这张单从没接过单：把响应时间补成结束时间，
-  // 否则详情里「响应时间」永远空白，响应达成率也统计不到这张单
-  if (b.status === 'done' && b.finish_time && oldRow && !oldRow.respond_time) {
-    sets.push('respond_time = ?'); vals.push(b.finish_time)
+  // 编辑里直接改成「已完成」而响应时间仍为空（例如投池后没人接就关单）：
+  // 用录入时刻补响应时间，绝不用结束时间——结束是完结时刻，不可能反过来当受理时刻
+  if (b.status === 'done' && oldRow && !oldRow.respond_time) {
+    sets.push('respond_time = COALESCE(accept_time, create_time, ?)')
+    vals.push(nowStr())
   }
   if (!sets.length) return fail(res, '无更新字段')
 
@@ -443,15 +449,16 @@ router.post('/:id/assign', asyncHandler(async (req, res) => {
   if (!u.length) return fail(res, '该用户不存在或已停用')
 
   const t2 = nowStr()
-  // 首次指派即视为「已响应」；完成时限同时从这一刻起算（接单 = 开始处理）。
-  // 待接单的单（可能是退回公海后又派出来的）用本次派单时间重新计时，
-  // 否则沿用它上一轮被接单的时间，完成时限会一上手就已经超期。
-  const respondTime = t.status === 'pending' ? t2 : (t.respond_time || t2)
+  // 首次受理（待接单 → 有人接/有人派）时，响应时间与开始处理时间同时落定。
+  // 转单不覆盖：响应只算一次，处理时限也不能因为换了负责人就重新给 24 小时。
+  const firstAccept = !t.accept_time && t.status !== 'done'
+  const respondTime = firstAccept ? t2 : (t.respond_time || t.accept_time || t2)
   await query(
-    `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?,
+    `UPDATE ticket SET assignee_id = ?, assign_time = ?,
+       respond_time = ?, accept_time = COALESCE(accept_time, ?),
        status = CASE WHEN status = 'pending' THEN 'processing' ELSE status END
      WHERE ticket_id = ?`,
-    [assigneeId, t2, respondTime, req.params.id]
+    [assigneeId, t2, respondTime, firstAccept ? t2 : null, req.params.id]
   )
   // 响应时间变了，完成时限要按接单时间重算（未接单时是按发生时间算的）
   await applySla(req.params.id).catch(() => {})
@@ -503,12 +510,12 @@ router.post('/:id/claim', asyncHandler(async (req, res) => {
   if (t.status !== 'pending') return fail(res, '该工单已被接取或已完成，请刷新列表')
 
   const t2 = nowStr()
-  // 接单时间一律记本次接单：单子可能被人接过后又退回公海，
-  // 保留上一次的响应时间会让「完成时限 = 上次接单 + 24h」早就过期，新接的人一接手就背锅
+  // 接单 = 受理 + 开始处理：响应时间记为本次接单时刻（覆盖录单时自动生成的录入时刻），
+  // accept_time 记首次开始处理时间。退回公海后重新接单时这两个值会被重置，重新计时。
   const r = await query(
-    `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?, status = 'processing'
+    `UPDATE ticket SET assignee_id = ?, assign_time = ?, respond_time = ?, accept_time = ?, status = 'processing'
      WHERE ticket_id = ? AND assignee_id IS NULL AND status = 'pending'`,
-    [req.user.user_id, t2, t2, req.params.id]
+    [req.user.user_id, t2, t2, t2, req.params.id]
   )
   // affectedRows=0 说明在这一瞬间被别人抢先了
   if (!r.affectedRows) return fail(res, '手慢了，这张工单刚被别人接取')
@@ -545,11 +552,12 @@ router.post('/:id/release', asyncHandler(async (req, res) => {
   if (rows[0].status === 'done') return fail(res, '已完成的工单不能退回')
 
   await query(
-    `UPDATE ticket SET assignee_id = NULL, assign_time = NULL, status = 'pending' WHERE ticket_id = ?`,
+    `UPDATE ticket SET assignee_id = NULL, assign_time = NULL, accept_time = NULL,
+       respond_time = NULL, status = 'pending' WHERE ticket_id = ?`,
     [req.params.id]
   )
-  // 退回公海后当前无人处理，完成时限要从发生时间重新算（resolveBaseOf 对 pending 的处理），
-  // 不重算的话它还挂在上一位接单人的时限上，谁接手都显示超期
+  // 退回公海后当前无人受理、无人处理：清掉响应/开始处理时间，
+  // 完成时限退回按发生时间算；下一个人接单时再重新落定这两个时刻
   await applySla(req.params.id).catch(() => {})
   await closeTicketTodos(req.params.id).catch(() => {})
   const r = await dispatchTicket(rows[0]).catch(() => ({ notified: 0 }))
@@ -562,7 +570,8 @@ router.post('/:id/release', asyncHandler(async (req, res) => {
  * 完成工单：写完成时间与处理说明，按需把处理方案同步进知识库。
  * 权限：自己名下的单；管理员/审计员/服务台可完成全部。
  * 口径：finish_time 是「完成量」的唯一依据，缺它会让时长统计、完成率、月度环比全部失真，
- *      因此这里一定会兜出一个完成时间；respond_time 若为空也顺手补上，保证响应达成率可算。
+ *      因此这里一定会兜出一个完成时间；respond_time 若为空则按录入时刻补齐，
+ *      保证响应达成率可算——但绝不拿这个结束时间来回填响应时间。
  *
  * @param {import('express').Request} req body 可含 finish_time/handle_desc/sync_kb/solution
  * @param {import('express').Response} res 返回 { ticket_id, kb_id }
@@ -578,15 +587,16 @@ router.post('/:id/complete', asyncHandler(async (req, res) => {
   const ticket = rows[0]
 
   // 与编辑接口同一条规则：完成时间不能早于发生时间、非法日期按当前时间兜底；
-  // 还要夹到接单时间之后 —— 处理耗时 = 结束 - 接单，结束早于接单会算出负数
+  // 还要夹到「开始处理时间」之后。补单没有接单流程时允许结束时间早于响应时间（先干活后补单）。
+  // 注意：这里绝不写 respond_time —— 关单时刻不是响应时刻。
   const nf = normalizeTimes({ happen_time: ticket.happen_time, finish_time: safeDate(finish_time), status: 'done' })
   let finishAt = nf.finish_time || nowStr()
-  if (ticket.respond_time && String(finishAt) < String(ticket.respond_time)) finishAt = ticket.respond_time
+  if (ticket.accept_time && String(finishAt) < String(ticket.accept_time)) finishAt = ticket.accept_time
 
   await query(
     `UPDATE ticket SET status = 'done', finish_time = ?, handle_desc = ?,
-       respond_time = COALESCE(respond_time, ?) WHERE ticket_id = ?`,
-    [finishAt, handle_desc ?? ticket.handle_desc, ticket.respond_time || finishAt, ticketId]
+       respond_time = COALESCE(respond_time, accept_time, create_time, ?) WHERE ticket_id = ?`,
+    [finishAt, handle_desc ?? ticket.handle_desc, nowStr(), ticketId]
   )
   // 完成时限缺失（历史单 / 当时没有策略）才补算；已有值不动，
   // 否则「先接单后完成」的单会因为响应时间被补记而把完成时限推后，超时记录被抹掉
@@ -666,6 +676,8 @@ router.post('/batch-complete', asyncHandler(async (req, res) => {
   const result = await query(
     `UPDATE ticket
      SET status = 'done',
+         -- 没接过单的补录单，响应时间取录入时刻；绝不能取完成时间
+         respond_time = COALESCE(respond_time, accept_time, create_time, NOW()),
          finish_time = CASE
            WHEN happen_time IS NULL THEN ?
            WHEN happen_time > ? THEN happen_time
@@ -693,7 +705,9 @@ router.post('/batch-status', asyncHandler(async (req, res) => {
   const sc = scopePlain(req)
   const t = nowStr()
   const sql = status === 'done'
-    ? `UPDATE ticket SET status='done', finish_time = CASE WHEN happen_time IS NULL THEN ? WHEN happen_time > ? THEN happen_time ELSE ? END
+    ? `UPDATE ticket SET status='done',
+         respond_time = COALESCE(respond_time, accept_time, create_time, NOW()),
+         finish_time = CASE WHEN happen_time IS NULL THEN ? WHEN happen_time > ? THEN happen_time ELSE ? END
        WHERE ticket_id IN (${placeholders(ids.length)}) ${sc.clause}`
     : `UPDATE ticket SET status='processing', finish_time = NULL WHERE ticket_id IN (${placeholders(ids.length)}) ${sc.clause}`
   const params = status === 'done'
@@ -906,8 +920,8 @@ router.post('/import/excel', upload.single('file'), asyncHandler(async (req, res
     }
     try {
       await query(
-        `INSERT INTO ticket (user_id, happen_time, contact, dept, service_content, app_system, problem_type, finish_time, handle_desc, status)
-         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO ticket (user_id, happen_time, contact, dept, service_content, app_system, problem_type, finish_time, handle_desc, status, respond_time)
+         VALUES (?,?,?,?,?,?,?,?,?,?, NOW())`,
         [req.user.user_id, fixed.happen_time, rec.contact, rec.dept, rec.service_content,
          rec.app_system, rec.problem_type, fixed.finish_time, rec.handle_desc,
          fixed.status]

@@ -206,17 +206,28 @@
         </el-descriptions-item>
         <el-descriptions-item label="负责人">{{ detail.assignee_name || '未分配' }}</el-descriptions-item>
         <el-descriptions-item label="指派时间">{{ detail.assign_time || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="完成时间">{{ detail.finish_time || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="接单时间（响应）">{{ detail.respond_time || '未接单' }}</el-descriptions-item>
-        <!-- 耗时三段分开显示：响应耗时（发生→接单）、处理耗时（接单→结束）、总耗时（发生→结束） -->
-        <el-descriptions-item label="处理耗时">
-          <span v-if="detail.handle_hours != null">{{ fmtHours(detail.handle_hours) }}</span>
-          <span v-else class="muted">{{ detail.status === 'done' ? '未单独接单，按总耗时计' : '未完成' }}</span>
-          <span v-if="detail.respond_hours_used != null" class="sla-detail">响应耗时 {{ fmtHours(detail.respond_hours_used) }}</span>
+        <!-- 四个时刻分开列：响应、开始处理、完结互不替代。
+             补单没走接单流程时「开始处理」为空，处理时长按发生时间起算 -->
+        <el-descriptions-item label="响应时间">
+          {{ detail.respond_time || '待接单（尚未受理）' }}
+          <span class="sla-detail">{{ detail.accept_time ? '（接单/派单时刻）' : '（补录时刻自动生成）' }}</span>
         </el-descriptions-item>
+        <el-descriptions-item label="开始处理">
+          <span v-if="detail.accept_time">{{ detail.accept_time }}</span>
+          <span v-else class="muted">补单，按发生时间起算</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="结束时间（完结）">{{ detail.finish_time || '—' }}</el-descriptions-item>
         <el-descriptions-item label="总耗时">
           <span v-if="detail.total_hours != null">{{ fmtHours(detail.total_hours) }}</span>
           <span v-else class="muted">未完成</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="处理耗时" :span="2">
+          <span v-if="detail.handle_hours != null">{{ fmtHours(detail.handle_hours) }}</span>
+          <span v-else class="muted">未完成</span>
+          <span class="sla-detail">
+            {{ detail.accept_time ? '结束时间 − 开始处理时间' : '结束时间 − 发生时间（补单未走接单流程）' }}
+          </span>
+          <span v-if="detail.respond_hours_used != null" class="sla-detail">响应耗时 {{ fmtHours(detail.respond_hours_used) }}</span>
         </el-descriptions-item>
         <!-- 时效单独占一行：应响应/应解决/实际时间 + 命中的策略，超时争议时能当场核对 -->
         <el-descriptions-item label="时效" :span="2">
@@ -277,7 +288,7 @@
              选「已完成」自动补当前时间（作为结束时间）；清空完成时间则状态回落为处理中 -->
         <el-form-item label="结束时间">
           <el-date-picker v-model="editForm.finish_time" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" @change="onEditFinishChange" />
-          <div class="form-hint">填完即「处理结束」，处理耗时按「结束时间 − 接单时间」计算</div>
+          <div class="form-hint">处理耗时 = 结束时间 − 开始处理时间；补单未走接单流程时按发生时间起算</div>
         </el-form-item>
         <el-form-item label="处理说明"><el-input v-model="editForm.handle_desc" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="优先级">
@@ -552,7 +563,9 @@ function slaText(row) {
     if (row.state === 'overdue') return '已超时'
     return row.respond_late ? '响应晚' : '按时完成'
   }
-  // 未完成时把两段分开说：开服务台时响应=派单（服务台的责任），关服务台时响应=接单（全员的责任）
+  // 未完成时把两段分开说：开服务台时响应=派单（服务台的责任），关服务台时响应=接单（全员的责任）。
+  // 还无人受理时优先说「没人接单/派单」——这时连处理都没开始，说「完成超时」会把责任指错环节。
+  if (!row.respond_time && row.respond_state === 'overdue') return desk ? '派单超时' : '接单超时'
   if (row.resolve_state === 'overdue') return '完成超时'
   if (row.respond_state === 'overdue') return desk ? '派单超时' : '接单超时'
   if (row.status === 'pending') return desk ? '待指派' : '待接单'
@@ -564,22 +577,18 @@ function slaText(row) {
 function slaTip(row) {
   const parts = []
   if (row.sla_respond_due) parts.push(`应响应：${String(row.sla_respond_due).slice(5, 16)}`)
-  if (row.respond_time) parts.push(`接单：${String(row.respond_time).slice(5, 16)}`)
+  if (row.respond_time) parts.push(`响应：${String(row.respond_time).slice(5, 16)}`)
   if (row.sla_resolve_due) parts.push(`应解决：${String(row.sla_resolve_due).slice(5, 16)}`)
-  if (row.finish_time) parts.push(`完成：${String(row.finish_time).slice(5, 16)}`)
+  if (row.finish_time) parts.push(`完结：${String(row.finish_time).slice(5, 16)}`)
   if (row.remain_hours != null && row.status !== 'done') parts.push(`剩余 ${row.remain_hours} 小时`)
   // 未完成的超时说清楚卡在哪一段：服务台模式下是没人派单，抢单模式下是没人接单
   if (row.status !== 'done' && row.respond_state === 'overdue' && row.resolve_state !== 'overdue') {
     parts.push(workflow.service_desk_enable ? '（服务台尚未派单，已超过响应时限）' : '（尚无人接单，已超过响应时限）')
   }
-  // 耗时口径：接单才算开始处理，处理耗时 = 结束 - 接单；总耗时 = 结束 - 发生
+  // 耗时口径：响应只表示「受理」，开始处理才是处理时长的起点
   if (row.handle_hours != null) parts.push(`处理耗时 ${fmtHours(row.handle_hours)}`)
   else if (row.total_hours != null) parts.push(`总耗时 ${fmtHours(row.total_hours)}`)
-  // 直接完成、没走过接单/派单的单子，后端会把响应时间补成完成时间，
-  // 这时「响应晚」只是推导结果，不是真的拖了接单，提示里要说清楚
-  if (row.status === 'done' && row.respond_time && row.finish_time && String(row.respond_time) === String(row.finish_time)) {
-    parts.push('（未单独接单，响应时间按完成时间计）')
-  }
+  if (!row.accept_time) parts.push('（补单：未走接单流程，处理时长按 发生→完结 计）')
   if (row.status === 'done' && row.respond_late && row.state !== 'overdue') {
     parts.push('（响应晚于时限，但完成未超时）')
   }

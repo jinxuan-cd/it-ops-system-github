@@ -80,7 +80,7 @@ async function metricsOf(range, which) {
        SUM(status = 'done') AS closed_in_period,
        ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND happen_time IS NOT NULL
                            AND finish_time > happen_time
-                      THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
+                      THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
        COUNT(DISTINCT user_id) AS active_users
      FROM ticket WHERE ${cond('happen_time', range, which)}`
   )
@@ -225,7 +225,7 @@ async function userRankOf(range) {
      LEFT JOIN (
        SELECT ${OWNER} AS uid, COUNT(*) AS done_cnt,
               ROUND(AVG(CASE WHEN happen_time IS NOT NULL AND finish_time > happen_time
-                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
+                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
        FROM ticket WHERE status = 'done' AND finish_time IS NOT NULL AND ${cond('finish_time', range)}
        GROUP BY ${OWNER}
      ) d ON d.uid = u.user_id
@@ -271,7 +271,7 @@ async function rankOf(field, range, limit = 10) {
             SUM(status = 'done') AS done,
             ROUND(AVG(CASE WHEN status = 'done' AND finish_time IS NOT NULL AND happen_time IS NOT NULL
                                 AND finish_time > happen_time
-                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
+                           THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours
      FROM ticket
      WHERE ${field} IS NOT NULL AND ${field} <> '' AND ${cond('happen_time', range)}
      GROUP BY ${field} ORDER BY value DESC`
@@ -575,7 +575,7 @@ router.get('/user-tickets', asyncHandler(async (req, res) => {
     `SELECT t.ticket_id, t.happen_time, t.finish_time, t.dept, t.app_system, t.problem_type,
             t.service_content, t.handle_desc, t.status,
             CASE WHEN t.status = 'done' AND t.happen_time IS NOT NULL AND t.finish_time >= t.happen_time
-                 THEN ROUND(TIMESTAMPDIFF(MINUTE, COALESCE(t.respond_time, t.happen_time), t.finish_time) / 60, 1) END AS hours
+                 THEN ROUND(TIMESTAMPDIFF(MINUTE, COALESCE(t.accept_time, t.happen_time), t.finish_time) / 60, 1) END AS hours
      FROM ticket t
      WHERE t.user_id = ?
        AND ((${cond('t.happen_time', range)}) OR (t.status = 'done' AND ${cond('t.finish_time', range)}))
@@ -631,7 +631,7 @@ router.get('/person', asyncHandler(async (req, res) => {
     query(
       `SELECT COUNT(*) AS done,
               ROUND(AVG(CASE WHEN happen_time IS NOT NULL AND finish_time > happen_time
-                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
+                             THEN TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60 END), 1) AS avg_hours,
               SUM(CASE WHEN sla_resolve_due IS NOT NULL AND finish_time > sla_resolve_due THEN 1 ELSE 0 END) AS sla_overdue
        FROM ticket WHERE ${OWNER} = ? AND status = 'done' AND finish_time IS NOT NULL AND ${cond('finish_time', range)}`,
       [userId]
@@ -672,7 +672,7 @@ router.get('/person', asyncHandler(async (req, res) => {
       `SELECT ticket_id, report_no, happen_time, finish_time, dept, app_system, problem_type,
               service_content, status, priority,
               CASE WHEN status = 'done' AND happen_time IS NOT NULL AND finish_time >= happen_time
-                   THEN ROUND(TIMESTAMPDIFF(MINUTE, COALESCE(respond_time, happen_time), finish_time) / 60, 1) END AS hours
+                   THEN ROUND(TIMESTAMPDIFF(MINUTE, COALESCE(accept_time, happen_time), finish_time) / 60, 1) END AS hours
        FROM ticket WHERE ${OWNER} = ? AND ((${cond('happen_time', range)}) OR (status = 'done' AND ${cond('finish_time', range)}))
        ORDER BY happen_time DESC, ticket_id DESC LIMIT 10`, [userId]
     ),
