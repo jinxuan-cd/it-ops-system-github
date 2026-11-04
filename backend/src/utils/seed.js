@@ -497,6 +497,30 @@ async function migrateSchema() {
     CONSTRAINT fk_uac_user FOREIGN KEY (user_id) REFERENCES sys_user (user_id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户AI接入配置表'`)
 
+  // 服务器维护台账：计划 → 实施 → 结果三段式记录，支持照片留档
+  // photos 存 JSON 数组（/uploads/ 下的地址），用于维护后调取现场照片
+  await query(`CREATE TABLE IF NOT EXISTS server_maintenance (
+    maint_id       INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id        INT UNSIGNED NOT NULL COMMENT '登记人',
+    server_name    VARCHAR(120) NOT NULL COMMENT '服务器/主机名',
+    maint_type     VARCHAR(30) NOT NULL DEFAULT '例行巡检' COMMENT '例行巡检/系统升级/补丁修复/硬件更换/故障处理/备份恢复',
+    plan_content   TEXT NULL COMMENT '维护计划',
+    exec_content   TEXT NULL COMMENT '实施过程',
+    result_content TEXT NULL COMMENT '维护结果',
+    result_state   VARCHAR(20) NOT NULL DEFAULT '' COMMENT '成功/部分成功/失败，空=尚未出结果',
+    maint_status   VARCHAR(20) NOT NULL DEFAULT 'planned' COMMENT 'planned/processing/done',
+    plan_date      DATE NULL COMMENT '计划日期',
+    exec_date      DATE NULL COMMENT '实施日期',
+    photos         TEXT NULL COMMENT '现场照片(JSON数组 /uploads/ 地址)',
+    remark         VARCHAR(300) NULL,
+    create_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (maint_id),
+    KEY idx_user (user_id),
+    KEY idx_status (maint_status),
+    KEY idx_server (server_name)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='服务器维护台账'`)
+
   // 历史数据修复（时区 / 脏数据），只执行一次
   await repairLegacyData()
 

@@ -46,6 +46,8 @@ const routes = [
       { path: 'tickets', name: 'TicketManage', component: () => import('../views/TicketManage.vue') },
       { path: 'incidents', name: 'IncidentManage', component: () => import('../views/IncidentManage.vue'), meta: { write: true } },
       { path: 'inspections', name: 'Inspection', component: () => import('../views/Inspection.vue'), meta: { write: true } },
+      // 服务器维护台账：计划/实施/结果三段留痕 + 照片归档
+      { path: 'maintenances', name: 'MaintenanceLedger', component: () => import('../views/MaintenanceLedger.vue'), meta: { write: true } },
       { path: 'accounts', name: 'AccountLedger', component: () => import('../views/AccountLedger.vue'), meta: { write: true } },
       { path: 'todos', name: 'TodoManage', component: () => import('../views/TodoManage.vue'), meta: { write: true } },
       { path: 'goals', name: 'GoalManage', component: () => import('../views/GoalManage.vue'), meta: { write: true } },

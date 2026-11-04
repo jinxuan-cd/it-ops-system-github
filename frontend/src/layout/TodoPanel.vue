@@ -68,7 +68,10 @@
       </div>
 
       <div class="panel-block">
-        <div class="block-title">本月目标</div>
+        <div class="block-title">
+          本月目标
+          <span class="pool-go" @click="goGoals">管理 →</span>
+        </div>
         <el-progress
           type="circle"
           :percentage="goalProgress"
@@ -76,6 +79,22 @@
           :stroke-width="8"
         />
         <div class="goal-text">{{ goalDone }} / {{ goalTotal }} 已完成</div>
+        <!-- 目标明细：未完成在前，可直接打勾；分页每页 GOAL_PAGE_SIZE 条，不把整月目标全铺出来 -->
+        <div class="goal-list">
+          <div v-if="!goalItems.length" class="empty">本月暂无目标</div>
+          <div v-for="g in pagedGoals" :key="g.goal_id" class="todo-item goal-item" :class="{ finished: g.is_finish }">
+            <el-checkbox
+              :model-value="!!g.is_finish"
+              @change="(v) => toggleGoal(g, v)"
+            />
+            <span class="todo-text" :title="g.goal_content">{{ g.goal_content }}</span>
+          </div>
+        </div>
+        <div v-if="goalTotalCount > GOAL_PAGE_SIZE" class="goal-pager">
+          <el-icon :class="{ off: goalPage <= 1 }" @click="goalPage > 1 && goalPage--"><ArrowUp /></el-icon>
+          <span>{{ goalPage }} / {{ Math.ceil(goalTotalCount / GOAL_PAGE_SIZE) }}</span>
+          <el-icon :class="{ off: goalPage >= Math.ceil(goalTotalCount / GOAL_PAGE_SIZE) }" @click="goalPage < Math.ceil(goalTotalCount / GOAL_PAGE_SIZE) && goalPage++"><ArrowDown /></el-icon>
+        </div>
       </div>
 
       <div class="drag-tip">拖动标题栏可移动此面板</div>
@@ -108,6 +127,14 @@ const pool = ref([])
 const goalDone = ref(0)
 const goalTotal = ref(0)
 const goalProgress = ref(0)
+// 目标明细：本月目标列表（未完成在前）+ 分页；每页条数写死，面板窄，多了会顶到屏幕外
+const GOAL_PAGE_SIZE = 5
+const goalItems = ref([])
+const goalTotalCount = ref(0)
+const goalPage = ref(1)
+const pagedGoals = computed(() =>
+  goalItems.value.slice((goalPage.value - 1) * GOAL_PAGE_SIZE, goalPage.value * GOAL_PAGE_SIZE)
+)
 const assignedCount = ref(0)
 const loadFailed = ref(false)
 
@@ -214,6 +241,20 @@ async function load() {
     goalTotal.value = m.goal_total || 0
     goalProgress.value = m.goal_progress || 0
   }
+  // 目标明细单独拉：目标接口按完成/未完成二分，两次取回后未完成排前面
+  try {
+    const now = new Date()
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const [undone, done] = await Promise.all([
+      R.listGoals(ym).catch(() => []),
+      R.listGoals(ym, true).catch(() => [])
+    ])
+    goalItems.value = [...(undone || []), ...(done || [])]
+    goalTotalCount.value = goalItems.value.length
+    // 翻页状态下数据刷新后页码可能超出范围，往回收一页
+    const maxPage = Math.max(1, Math.ceil(goalTotalCount.value / GOAL_PAGE_SIZE))
+    if (goalPage.value > maxPage) goalPage.value = maxPage
+  } catch { /* 目标明细拉取失败不影响主列表 */ }
   loadFailed.value = pending === null && dash === null
 }
 
@@ -254,6 +295,21 @@ async function markDone(t, v) {
     ElMessage.success('已标记完成')
     load()
   } catch (e) { ElMessage.error(e.message) }
+}
+
+// 目标打勾 / 取消：双向可切换（月中发现标错了能改回来），
+// 成功后整块刷新，进度圈与未完成列表一起更新
+async function toggleGoal(g, v) {
+  try {
+    await R.updateGoal(g.goal_id, { is_finish: v ? 1 : 0 })
+    ElMessage.success(v ? '目标已完成 🎉' : '已恢复为未完成')
+    load()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+// 「管理 →」跳到月度目标页
+function goGoals() {
+  router.push('/goals')
 }
 
 // 跨标签页：设置页在另一个标签改了开关，这里通过 storage 事件同步
@@ -330,6 +386,11 @@ onBeforeUnmount(() => {
 .todo-item { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; }
 .todo-text { font-size: 13px; color: #4a5266; line-height: 1.4; }
 .goal-text { text-align: center; font-size: 12px; color: var(--it-text-sub); margin-top: 6px; }
+.goal-list { margin-top: 8px; }
+.goal-item.finished .todo-text { color: var(--it-text-sub); text-decoration: line-through; }
+.goal-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--it-text-sub); }
+.goal-pager .el-icon { cursor: pointer; }
+.goal-pager .el-icon.off { opacity: 0.35; cursor: default; }
 .todo-item.assign { cursor: pointer; }
 .todo-item.assign:hover .todo-text { color: var(--it-primary); }
 .a-icon { color: var(--it-warning); font-size: 14px; margin-top: 2px; }

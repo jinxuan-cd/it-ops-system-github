@@ -152,6 +152,9 @@ const menus = computed(() => {
         ...(notAuditor ? [
           { path: '/incidents', icon: 'Warning', title: '故障管理', m: true },
           { path: '/inspections', icon: 'Location', title: '机房巡检', m: true },
+          { path: '/maintenances', icon: 'Cpu', title: '服务器维护台账', m: true },
+          // 账号与权限台账是日常运维动作（开通/变更/注销随手登记），归到运维工作而不是管理组
+          { path: '/accounts', icon: 'Key', title: '账号与权限台账' },
           { path: '/todos', icon: 'Bell', title: '待办任务管理', m: true },
           { path: '/goals', icon: 'Aim', title: '月度目标管理' },
           { path: '/projects', icon: 'FolderOpened', title: '项目管理', m: true }
@@ -171,7 +174,6 @@ const menus = computed(() => {
       items: [
         { path: '/report-export', icon: 'Download', title: '报表导出' },
         ...(viewAll ? [{ path: '/report-review', icon: 'Notebook', title: '日报月报查阅', m: true }] : []),
-        ...(notAuditor ? [{ path: '/accounts', icon: 'Key', title: '账号与权限台账' }] : []),
         ...(admin ? [
           { path: '/sla', icon: 'Timer', title: 'SLA 时效策略' },
           { path: '/dictionary', icon: 'Setting', title: '基础字典维护' },

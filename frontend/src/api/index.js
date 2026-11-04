@@ -259,6 +259,20 @@ const R = {
   // 删除台账：DELETE /accounts/:id
   deleteAccount: (id) => api.delete(`/accounts/${id}`),
 
+  // 服务器维护台账
+  // 台账列表（服务端分页）：GET /maintenances
+  listMaintenances: (params) => api.get('/maintenances', { params }),
+  // 维护类型/结果枚举：GET /maintenances/meta
+  maintenanceMeta: () => api.get('/maintenances/meta'),
+  // 现场照片上传：POST /maintenances/upload（multipart，最多 9 张）
+  maintenanceUpload: (formData) => api.post('/maintenances/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  // 新增台账：POST /maintenances
+  createMaintenance: (d) => api.post('/maintenances', d),
+  // 编辑台账：PUT /maintenances/:id
+  updateMaintenance: (id, d) => api.put(`/maintenances/${id}`, d),
+  // 删除台账：DELETE /maintenances/:id
+  deleteMaintenance: (id) => api.delete(`/maintenances/${id}`),
+
   // 操作审计
   // 审计日志：GET /audit-logs（谁在什么时候改了什么）
   listAuditLogs: (params) => api.get('/audit-logs', { params }),
