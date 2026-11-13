@@ -1,0 +1,47 @@
+# ---------------- 依赖 / 构建产物 ----------------
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ---------------- 环境变量（含口令与密钥，禁止入库） ----------------
+.env
+.env.*
+!.env.example
+!backend/.env.example
+
+# ---------------- 运行时数据（业务数据不在代码库中） ----------------
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/backups/*
+!backend/backups/.gitkeep
+*.zip
+
+# ---------------- 日志与临时文件 ----------------
+*.log
+logs/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------- 编辑器 / IDE ----------------
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# ---------------- 本地开发产物（截图、调试脚本等） ----------------
+.dev-artifacts/
+*.png
+*.jpg
+*.jpeg
+!docs/**/*.png
+
+# ---------------- 数据库本地导出 ----------------
+*.sql.bak
+dump/

@@ -1,0 +1,137 @@
+# =============================================================================
+#  IT 运维工单台账与日报系统
+#  -----------------------------------------------------------------------------
+#  三个容器，两个对外端口：
+#    frontend   管理端（内网）  -> ${ADMIN_PORT:-8080}    完整后台，登录后使用
+#    public-web 员工自助（公网）-> ${PUBLIC_PORT:-8081}   只有报障/查询/常见问题
+#    backend    后端 API        -> 不映射宿主机端口，两个前端容器共用
+#    db         MariaDB 10.11   -> 不映射宿主机端口，只在容器网络内可见
+#
+#  两个前端入口反代的是同一个 backend、同一个数据库，数据天然互通，
+#  不需要任何同步或桥接。公网端口只放行 /api/public/*，其余路径直接 404。
+#
+#  ⚠ 改端口：编辑同目录 .env 里的 ADMIN_PORT / PUBLIC_PORT，然后**必须重建**：
+#       docker compose up -d --force-recreate
+#    （docker compose restart 不会更新端口映射，这是"改了 env 不生效"的常见原因）
+#  -----------------------------------------------------------------------------
+#  作者：锦轩 (JinXuan) <2686389727@qq.com>    版本：1.4.2    创建：2026-10-29
+#  Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+#  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+#        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+# =============================================================================
+
+services:
+  db:
+    # MariaDB 10.11（LTS）：与 MySQL 协议/语法高度兼容，初始化更快、资源占用更低
+    # ⚠ MariaDB 读不了 MySQL 8.0 的数据目录，切换镜像必须换新数据卷（见文件末尾 volumes）
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      # 镜像内的变量名是 MARIADB_*；右侧仍读 .env 里的 MYSQL_*，老 .env 不用改
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-itops_root_2026}
+      MARIADB_DATABASE: ${MYSQL_DATABASE:-itops}
+      MARIADB_USER: ${MYSQL_USER:-itops}
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:-itops_2026}
+      # 时区必须与业务本地时间一致，否则 NOW() 与工单时间差 8 小时（会出现「已挂 -7h」的怪值）
+      TZ: Asia/Shanghai
+    # 服务器默认时区固定为东八区：NOW()/CURDATE() 全部按北京时间
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone=+08:00
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      # ⚠ 初始化脚本**只在数据卷为空（第一次启动）时**执行一次。
+      #   之后无论是 restart、up -d、--force-recreate 还是换镜像重建容器，
+      #   数据目录已经有内容，入口脚本会跳过 init.sql，工单/账号/配置全部保留。
+      #   唯一会重新初始化的情况是手动删卷：docker compose down -v
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # 用 env 里的 root 口令探活，避免 MariaDB 下 mysqladmin 空口令探测失败
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - itops-net
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      TZ: Asia/Shanghai
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE:-itops}
+      DB_USER: ${MYSQL_USER:-itops}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-itops_2026}
+      JWT_SECRET: ${JWT_SECRET:-change_this_secret_in_prod}
+      # 首次启动创建的管理员初始口令（用户表为空时生效）
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      # 可选：把二维码入口密钥固定在 .env 里（REPORT_KEY=一串随机字符）。
+      # 不填也完全不影响现有部署——密钥存在数据库卷里，重建容器不会变；
+      # 填了则额外保证「数据卷被删/换了项目目录」后首次生成仍是同一个值。
+      # 数据库里已有密钥时以数据库为准，手动「重置入口密钥」始终有效。
+      REPORT_KEY: ${REPORT_KEY:-}
+      # 两个对外端口：设置公网门户地址时用来拦截「把管理端端口填进去」这类错误
+      ADMIN_PORT: ${ADMIN_PORT:-8080}
+      PUBLIC_PORT: ${PUBLIC_PORT:-8081}
+      UPLOAD_DIR: /app/uploads
+      # 备份包存放目录（挂卷，重建容器不丢）
+      BACKUP_DIR: /app/backups
+      # 本地 AI 服务在宿主机时：容器内用 host.docker.internal 访问宿主机
+      IN_DOCKER: "1"
+      AI_LOCALHOST_ALIAS: ${AI_LOCALHOST_ALIAS:-host.docker.internal}
+    extra_hosts:
+      # 让 Linux 宿主机也能解析 host.docker.internal（Docker Desktop 默认已支持）
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - itops-net
+
+  # ===========================================================================
+  #  管理端（内网）：完整后台界面，映射 ADMIN_PORT，只给内网电脑/手机访问
+  #  不要把这个端口映射到公网；公网只开 public-web
+  # ===========================================================================
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${ADMIN_PORT:-8080}:80"
+    depends_on:
+      - backend
+    networks:
+      - itops-net
+
+  # ===========================================================================
+  #  员工自助门户（公网）：独立端口，独立静态站
+  #  只提供报障 / 查进度 / 满意度 / 常见问题，nginx 仅反代 /api/public/*
+  #  映射 PUBLIC_PORT，由宝塔 WAF / 域名指向这个端口
+  # ===========================================================================
+  public-web:
+    build:
+      context: ./public-portal
+    restart: unless-stopped
+    ports:
+      # 只有这个端口需要映射到公网（云服务器安全组 / 路由器端口转发）
+      - "${PUBLIC_PORT:-8081}:80"
+    depends_on:
+      - backend
+    networks:
+      - itops-net
+
+volumes:
+  # 数据卷名固定为 mariadb_data：与之前的 MySQL 8.0 卷（db_data）完全分开，
+  # 切换镜像后不会被旧数据目录污染，首次启动会按 init.sql 全新初始化。
+  mariadb_data:
+
+networks:
+  itops-net:
+    driver: bridge

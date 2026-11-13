@@ -1,0 +1,444 @@
+IT 运维工单台账与日报管理系统 许可协议
+IT Ops Ticket & Report Management System License
+
+版本 1.0  |  生效日期：2026 年 11 月 2 日
+版权所有者（下称“作者”）：锦轩 (JinXuan)
+联系方式：2686389727@qq.com
+
+────────────────────────────────────────────────────────────────────────
+一句话概括（不具法律效力，仅为方便阅读）
+────────────────────────────────────────────────────────────────────────
+个人自用，以及 10 人以内、年营收 200 万元以内的小团队内部使用 —— 免费。
+其他商业使用（含对外销售、SaaS 托管、代运维、贴牌交付）—— 需向作者购买商业授权。
+无论哪种使用，都必须保留本版权声明，不得声称本项目由你原创。
+
+注意：本协议是“源码可见（Source Available）”许可，不是 OSI 定义的开源许可。
+
+授权与技术限制说明：本软件内置授权校验，免费版存在账号数量上限与功能开关，
+仅作者签发的授权码可解除这些限制。软件本身不含任何在线支付或应用内购买功能；
+商业授权通过邮箱联系作者购买，并以授权码形式交付与激活。
+────────────────────────────────────────────────────────────────────────
+
+第一条  定义
+
+1.1 “本软件”指本仓库中的全部源代码、配置文件、数据库脚本、界面样式、
+    文档及其后续更新版本（统称“本软件”）。
+
+1.2 “个人使用”指自然人出于自身学习、研究、测试、个人事务管理之目的
+    而使用本软件，且不向任何第三方收取费用、不将本软件或其修改版本
+    作为对第三方的交付物或服务内容。
+
+1.3 “小团队”指同时满足以下两项条件的组织：
+    (a) 该组织（含其关联方合并计算）的全部在职员工、兼职人员及长期
+        劳务外包人员总数不超过 10 人；
+    (b) 该组织上一会计年度的营业收入总额不超过人民币 200 万元。
+
+1.4 “内部使用”指在组织自身经营管理范围内使用本软件处理本组织的
+    IT 运维工单、巡检、报表等业务，不将本软件本身作为商品或服务
+    向第三方提供。
+
+1.5 “商业使用”指除第 1.2 条个人使用与第 1.3 条小团队内部使用之外的
+    一切使用行为，包括但不限于：
+    (a) 员工人数或营业收入超过第 1.3 条标准的组织进行任何使用；
+    (b) 以任何形式对外销售、出租、转让、分发本软件或其修改版本；
+    (c) 将本软件部署为 SaaS、云服务、托管服务并向使用者收费；
+    (d) 以本软件为基础向客户提供收费的 IT 运维外包、系统集成、
+        项目实施、技术支持等服务；
+    (e) 将本软件全部或部分嵌入其他商业产品中一并交付；
+    (f) 去除或替换本软件的标识、版权信息后作为自有产品交付（贴牌/OEM）。
+
+1.6 “修改版本”指对本软件进行增删、改写、二次开发后形成的衍生作品。
+
+第二条  免费授权（无需付费、无需申请）
+
+2.1 在遵守本协议全部条款的前提下，作者免费授予你一项非独占、不可转让、
+    可撤销的许可，允许你：
+
+    (a) 个人使用：为第 1.2 条所述目的使用、复制、修改本软件，并部署在
+        你自己的设备或你独占使用的服务器上；
+
+    (b) 小团队内部使用：符合第 1.3 条标准的小团队，可为自身经营管理
+        目的在本组织内部部署、使用、复制、修改本软件，使用人数与
+        部署实例数量不受限制，且无需支付任何费用；
+
+    (c) 为本协议允许的使用目的而制作备份、搭建测试环境。
+
+2.2 上述免费授权包含“内部经营使用”，即符合第 1.3 条标准的小团队
+    将本软件用于自身营利性经营活动，仍属免费范围。
+
+2.3 免费授权不因你修改本软件而扩展。修改版本仍受本协议约束，
+    且你对外分发修改版本时，必须一并提供本协议全文。
+
+2.4 本软件内置授权校验机制（属软件技术限制，非本条法律约束）：
+    (a) 免费版仅允许 1 个管理员账号与 2 个运维工程师账号；
+        服务台与审计员角色在免费版不可用；
+    (b) 管理员可在「菜单管理」中关闭客户不需要的功能模块
+        （日报、月报、项目管理、常见问题等）；
+    (c) 超出上述任何限制的使用，必须在系统「系统设置 → 授权管理」中
+        粘贴由作者签发的有效授权码并经验证通过后，方可解除；
+    (d) 该授权码由作者以 RSA 私钥签名、AES 加密生成，没有作者私钥
+        无法伪造，软件仅内置公钥用于验证，无法自行制造授权码。
+
+第三条  商业授权（需付费）
+
+3.1 任何构成第 1.5 条“商业使用”的行为，均须事先取得作者的书面商业授权。
+
+3.2 商业授权按以下维度另行协商确定授权范围与费用：
+    (a) 使用主体规模（员工人数、营收规模）；
+    (b) 部署方式（内部部署 / 对外服务托管）；
+    (c) 部署实例数量与终端用户数量；
+    (d) 是否需要贴牌、二次开发、源码交付或专属技术支持；
+    (e) 授权期限（年度订阅或永久授权）。
+
+3.3 商业授权申请方式：
+    邮箱：2686389727@qq.com
+    邮件标题请注明“商业授权申请 - 公司名称”，正文说明第 3.2 条各项信息，
+    作者将在收到申请后回复授权方案与报价。
+
+3.4 规模变化与宽限期：若你的组织在使用过程中超出第 1.3 条标准
+    （例如员工人数增至 11 人以上、或年度营收超过 200 万元），
+    自超出之日起享有 30 个自然日的调整宽限期；宽限期届满后继续使用的，
+    须先行取得商业授权。
+
+3.5 未取得商业授权而实施商业使用的，构成对本协议的违反，
+    作者有权依第八条终止授权并追究相应责任。
+
+3.6 授权交付与激活：
+    (a) 商业授权经第 3.3 条邮箱协商达成后，作者以「授权码」形式交付——
+        一串由作者私钥签名、AES 加密生成的字符串，内含授权客户、有效期
+        与各角色账号上限；
+    (b) 客户在系统「系统设置 → 授权管理」中粘贴该授权码并完成验证后，
+        即解除第 2.4 条所述的免费版技术限制（账号上限与功能开关按授权码
+        内容放开）；
+    (c) 本软件不内置任何在线支付、扫码付款或应用内购买功能；授权交易
+        （报价、付款、开票）均在线下通过邮箱完成，软件本身不参与任何
+        资金流转。
+
+第四条  你必须履行的义务
+
+4.1 保留声明：在本软件及其修改版本的所有副本、以及你对外提供的
+    任何形式的部署中，完整保留本协议全文、NOTICE 文件及源码中的
+    版权声明，不得删除、隐藏、篡改。
+
+4.2 不得冒充原创：不得将本软件或其主要部分以你的名义申请软件著作权
+    登记、申请专利、注册商标，或对外宣称由你独立开发。
+
+4.3 不得超范围再许可：不得将本协议授予你的权利再许可、转授权给他人，
+    但第 2.1 条范围内的组织内部成员使用除外。
+
+4.4 合法使用：不得将本软件用于违反中华人民共和国法律法规的活动，
+    不得用于侵犯他人合法权益的用途。
+
+4.5 修改版本标注：对外分发修改版本时，应在显著位置说明该版本
+    基于本软件修改而来，并注明修改内容与修改日期。
+
+第五条  第三方组件
+
+5.1 本软件使用了若干第三方组件（Vue、Element Plus、ECharts、Express、
+    MariaDB 等），这些组件各自适用其原有许可协议，著作权归各自作者所有。
+    逐项清单（含实际安装版本、许可协议、来源仓库与许可原文）见
+    THIRD-PARTY-LICENSES.txt；授权摘要与特别说明见 NOTICE 文件。
+
+5.2 本协议仅约束作者拥有著作权的部分，不改变、不替代任何第三方组件
+    的许可条款，作者亦不对第三方组件作任何再授权。你对第三方组件的
+    使用应同时遵守其许可要求。
+
+5.3 本软件以依赖包形式引入第三方组件，未将第三方源码复制进本项目。
+    MIT / BSD 类许可要求保留版权与许可声明，Apache-2.0 要求随分发物
+    附许可副本，故本项目随构建产物发布 THIRD-PARTY-LICENSES.txt。
+    你若对外分发本软件或其修改版本，应一并保留该文件或提供等效声明。
+
+第六条  无担保
+
+6.1 本软件按“现状”提供，不附带任何明示或默示的担保，包括但不限于
+    适销性、特定用途适用性、无病毒、无缺陷、不侵权的担保。
+
+6.2 作者不承诺提供技术支持、版本更新、缺陷修复或数据恢复服务。
+    上述服务仅在另行签订的服务协议中约定。
+
+6.3 使用者应自行承担部署、配置、数据备份与安全防护责任。
+    强烈建议在生产环境使用前完整测试，并建立独立的备份机制。
+
+第七条  责任限制
+
+7.1 在适用法律允许的最大范围内，作者不对因使用或无法使用本软件
+    而产生的任何直接、间接、偶然、特殊、惩罚性损害承担责任，
+    包括但不限于利润损失、业务中断、数据丢失、商誉损害。
+
+7.2 若依据适用法律上述限制不被认可，作者承担的赔偿总额以你为使用
+    本软件实际支付的费用为上限；免费使用的，赔偿上限为零。
+
+第八条  终止
+
+8.1 你违反本协议任一条款，本协议授予你的全部权利自动终止，
+    无需作者另行通知。
+
+8.2 授权终止后，你应在 30 日内停止使用本软件，删除或销毁
+    本软件及其修改版本的全部副本；已向第三方交付的，
+    应尽合理努力促使其停止使用。
+
+8.3 授权终止不影响本协议第四条、第六条、第七条、第九条的效力，
+    上述条款在终止后继续有效。
+
+第九条  法律适用与争议解决
+
+9.1 本协议的订立、效力、解释、履行及争议解决，适用中华人民共和国法律。
+
+9.2 因本协议产生的争议，双方应友好协商解决；协商不成的，
+    任何一方可向作者住所地有管辖权的人民法院提起诉讼。
+
+9.3 本协议任一条款被认定无效或不可执行的，不影响其余条款的效力。
+
+第十条  其他
+
+10.1 作者可能不时发布本协议的新版本。新版本仅适用于发布之后
+     取得本软件副本的使用者；你亦可选择继续适用取得副本时有效的版本。
+
+10.2 本协议构成双方就本软件使用达成的完整约定，取代此前的一切
+     口头或书面的相关说明。
+
+10.3 本协议以中文版本为准。英文译文仅供参考，如与中文版本存在歧义，
+     以中文版本为准。
+
+────────────────────────────────────────────────────────────────────────
+Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+版权所有。未经本协议明确授权，保留一切权利。
+────────────────────────────────────────────────────────────────────────
+
+
+================================================================================
+ENGLISH TRANSLATION (FOR REFERENCE ONLY — THE CHINESE VERSION PREVAILS)
+================================================================================
+
+IT Ops Ticket & Report Management System License
+Version 1.0 | Effective date: November 2, 2026
+Copyright holder ("Author"): JinXuan
+Contact: 2686389727@qq.com
+
+IN SHORT (non-binding summary)
+Free for personal use and for internal use by small teams of up to 10 people
+with annual revenue not exceeding RMB 2,000,000.
+All other commercial use — resale, SaaS hosting, managed services,
+white-label delivery — requires a paid commercial license from the Author.
+In all cases you must keep this copyright notice and must not claim the
+project as your own original work.
+NOTE: This is a source-available license, not an OSI-approved open source
+license.
+
+NOTE ON ENFORCEMENT: The Software embeds a license check. The free edition is
+technically limited (1 admin + 2 operator accounts, with a "Menu Management"
+screen to disable unused modules); only an activation code signed by the Author
+can lift these limits. The Software contains NO in-app payment or checkout
+function; commercial licensing is purchased by emailing the Author and
+delivered as an activation code.
+
+1. DEFINITIONS
+
+1.1 "Software" means all source code, configuration files, database scripts,
+    UI styles, documentation and any later versions in this repository.
+
+1.2 "Personal Use" means use by a natural person for their own learning,
+    research, testing or personal affairs, without charging any third party
+    and without delivering the Software or a Modified Version to any third
+    party as a product or service.
+
+1.3 "Small Team" means an organization meeting BOTH conditions:
+    (a) total number of full-time employees, part-time staff and long-term
+        contracted workers (on a consolidated basis with affiliates) does
+        not exceed 10; and
+    (b) total revenue of the preceding fiscal year does not exceed
+        RMB 2,000,000.
+
+1.4 "Internal Use" means using the Software within the organization's own
+    operations for its IT ticketing, inspection and reporting needs, without
+    offering the Software itself as a product or service to third parties.
+
+1.5 "Commercial Use" means any use other than Personal Use under 1.2 and
+    Small Team Internal Use under 1.3, including without limitation:
+    (a) any use by an organization exceeding the thresholds in 1.3;
+    (b) selling, renting, assigning or distributing the Software or any
+        Modified Version in any form;
+    (c) deploying the Software as a SaaS, cloud or hosted service for a fee;
+    (d) providing paid IT outsourcing, systems integration, implementation
+        or support services to customers based on the Software;
+    (e) embedding the Software, in whole or in part, in another commercial
+        product delivered to customers;
+    (f) removing or replacing the Software's branding and copyright notices
+        and delivering it as one's own product (white-label / OEM).
+
+1.6 "Modified Version" means any derivative work created by adding to,
+    deleting from, rewriting or further developing the Software.
+
+2. FREE LICENSE (NO FEE, NO APPLICATION REQUIRED)
+
+2.1 Subject to full compliance with this License, the Author grants you a
+    non-exclusive, non-transferable, revocable license to:
+    (a) Personal Use: use, copy and modify the Software for the purposes in
+        1.2 and deploy it on devices you own or servers you exclusively use;
+    (b) Small Team Internal Use: an organization meeting 1.3 may deploy, use,
+        copy and modify the Software for its own operations, with no limit on
+        the number of users or instances, free of charge;
+    (c) make backups and test environments for the permitted purposes.
+
+2.2 The free license includes internal business use, i.e. a qualifying
+    Small Team may use the Software in its own profit-making operations
+    at no charge.
+
+2.3 The free license is not expanded by modification. Modified Versions
+    remain subject to this License, and you must provide the full text of
+    this License when distributing a Modified Version.
+
+2.4 The Software embeds a license check (a technical restriction, not a legal
+    term under this Section):
+    (a) the free edition permits only 1 admin and 2 operator accounts; the
+        service-desk and auditor roles are unavailable in the free edition;
+    (b) an administrator may disable modules the customer does not need
+        (daily report, monthly report, project management, FAQ, etc.) via
+        "Menu Management";
+    (c) any use beyond these limits requires pasting a valid activation code
+        issued by the Author in "Settings → License Management" and passing
+        verification before the limits are lifted;
+    (d) that code is generated by the Author's private key (RSA signature +
+        AES encryption) and cannot be forged without it; the Software ships
+        only the public key for verification and cannot manufacture codes.
+
+3. COMMERCIAL LICENSE (PAID)
+
+3.1 Any Commercial Use under 1.5 requires the Author's prior written
+    commercial license.
+
+3.2 Commercial license scope and fees are agreed case by case based on:
+    (a) size of the licensee (headcount, revenue);
+    (b) deployment model (on-premise vs. hosted service);
+    (c) number of instances and end users;
+    (d) whether white-labelling, custom development, source delivery or
+        dedicated support is required;
+    (e) term (annual subscription or perpetual).
+
+3.3 To apply: email 2686389727@qq.com with the subject
+    "Commercial License Request - <Company Name>" and the details above.
+    The Author will reply with a licensing proposal and quotation.
+
+3.4 Grace period: if your organization exceeds the thresholds in 1.3 during
+    use, you have 30 calendar days from the date of exceeding to regularize;
+    continued use after the grace period requires a commercial license.
+
+3.5 Commercial Use without a license violates this License; the Author may
+    terminate your rights under Section 8 and pursue remedies.
+
+3.6 Delivery and activation:
+    (a) upon a commercial license agreed under 3.3 by email, the Author
+        delivers it as an "activation code" — a string signed by the Author's
+        private key and AES-encrypted, carrying the licensee, validity period
+        and per-role account caps;
+    (b) the licensee pastes that code in "Settings → License Management" and,
+        once verified, the free-edition limits in 2.4 are lifted (account caps
+        and module switches open per the code);
+    (c) the Software contains no online payment, QR-code checkout or in-app
+        purchase functionality; the licensing transaction (quotation, payment,
+        invoicing) is completed offline by email, and the Software itself
+        handles no money flow.
+
+4. YOUR OBLIGATIONS
+
+4.1 Keep notices: retain this License, the NOTICE file and all copyright
+    notices in the source code in every copy and every deployment, without
+    deletion, concealment or alteration.
+
+4.2 No false attribution: you may not register the Software or its
+    substantial parts as your own copyright, apply for patents or trademarks
+    on it, or claim that you independently developed it.
+
+4.3 No sublicensing beyond this License, except use by members within an
+    organization covered by 2.1.
+
+4.4 Lawful use: you may not use the Software for activities that violate
+    the laws of the People's Republic of China or infringe the rights of
+    others.
+
+4.5 Mark modifications: when distributing a Modified Version, clearly state
+    that it is based on the Software and note the changes and their dates.
+
+5. THIRD-PARTY COMPONENTS
+
+5.1 The Software uses third-party components (Vue, Element Plus, ECharts,
+    Express, MariaDB, etc.), each governed by its own license and owned by
+    its respective authors. The itemized list - actual installed versions,
+    licenses, source repositories and full license texts - is in
+    THIRD-PARTY-LICENSES.txt; a summary is in the NOTICE file.
+
+5.2 This License governs only the parts copyrighted by the Author and does
+    not alter any third-party license terms. The Author grants no
+    sublicense for any third-party component.
+
+5.3 Third-party components are consumed as dependency packages; no
+    third-party source code has been copied into this project. MIT / BSD
+    style licenses require retaining copyright and license notices, and
+    Apache-2.0 requires supplying a copy of the license, so this project
+    ships THIRD-PARTY-LICENSES.txt alongside its build output. If you
+    distribute the Software or a Modified Version, you must keep that file
+    or provide an equivalent notice.
+
+6. NO WARRANTY
+
+6.1 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT,
+    FREEDOM FROM VIRUSES OR DEFECTS.
+
+6.2 The Author does not undertake to provide support, updates, bug fixes or
+    data recovery. Such services are provided only under a separate
+    service agreement.
+
+6.3 You are responsible for deployment, configuration, backup and security.
+    Test thoroughly before production use and maintain independent backups.
+
+7. LIMITATION OF LIABILITY
+
+7.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE AUTHOR SHALL NOT
+    BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL OR PUNITIVE
+    DAMAGES ARISING FROM THE USE OF OR INABILITY TO USE THE SOFTWARE,
+    INCLUDING LOST PROFITS, BUSINESS INTERRUPTION, DATA LOSS OR LOSS OF
+    GOODWILL.
+
+7.2 If such limitation is not enforceable, the Author's aggregate liability
+    shall not exceed the amount you actually paid for the Software; for
+    free use, the cap is zero.
+
+8. TERMINATION
+
+8.1 Any breach of this License automatically terminates all rights granted
+    to you, without further notice.
+
+8.2 Upon termination you must cease use within 30 days and delete or destroy
+    all copies of the Software and Modified Versions, and make reasonable
+    efforts to cause third parties to whom you delivered it to stop using it.
+
+8.3 Sections 4, 6, 7 and 9 survive termination.
+
+9. GOVERNING LAW AND DISPUTES
+
+9.1 This License is governed by the laws of the People's Republic of China.
+
+9.2 Disputes shall first be resolved through friendly negotiation; failing
+    that, either party may bring an action before the competent people's
+    court at the Author's domicile.
+
+9.3 If any provision is held invalid or unenforceable, the remaining
+    provisions remain in effect.
+
+10. MISCELLANEOUS
+
+10.1 The Author may publish new versions of this License. A new version
+     applies only to copies obtained after its publication; you may continue
+     to rely on the version in effect when you obtained your copy.
+
+10.2 This License is the entire agreement regarding use of the Software and
+     supersedes all prior statements, oral or written.
+
+10.3 The Chinese version prevails. This English text is a reference
+     translation; in case of ambiguity, the Chinese version controls.
+
+--------------------------------------------------------------------------------
+Copyright (c) 2026 JinXuan. All rights reserved.
+--------------------------------------------------------------------------------

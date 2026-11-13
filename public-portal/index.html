@@ -1,0 +1,209 @@
+<!--
+  门户页面骨架 —— IT 运维工单台账与日报自动管理系统
+  扫码报障与常见问题的静态页面，版本串用于破缓存
+
+  作者：锦轩 (JinXuan) <2686389727@qq.com>
+  创建：2026-10-29　　版本：1.4.2
+  版权：Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+  许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+        其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#2563eb">
+<meta name="robots" content="noindex, nofollow">
+<title>IT 报障服务台</title>
+<link rel="stylesheet" href="/style.css?v=20261112b">
+</head>
+<body>
+
+<header class="head">
+  <div class="brand">
+    <div class="logo">IT</div>
+    <div class="brand-text">
+      <h1>IT 报障服务台</h1>
+      <p>提交问题 · 查询进度 · 服务评价</p>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs" hidden>
+  <button class="tab on" data-tab="report">我要报障</button>
+  <button class="tab" data-tab="track">查询进度</button>
+  <button class="tab" data-tab="faq">常见问题</button>
+</nav>
+
+<!-- 值班 IT 联系方式：管理员在「系统设置 → 自助服务入口」维护，点一下直接拨号 -->
+<div class="duty" id="duty" hidden></div>
+
+<main class="wrap">
+
+  <!-- 加载中 -->
+  <section class="card center" id="loading">
+    <div class="spinner"></div>
+    <p class="muted">正在加载…</p>
+  </section>
+
+  <!-- 入口不可用 -->
+  <section class="card center" id="blocked" hidden>
+    <svg class="ico warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h2 id="blockedTitle">自助入口暂不可用</h2>
+    <p class="muted" id="blockedDesc">请联系 IT 同事。</p>
+  </section>
+
+  <!-- ============ 我要报障 ============ -->
+  <section class="panel" data-panel="report" hidden>
+    <!-- 提交成功 -->
+    <div class="card center" id="reportDone" hidden>
+      <svg class="ico ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.5 2.5L16 9.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h2>报障已提交</h2>
+      <p class="muted">您的报障单号是</p>
+      <div class="no-box" id="doneNo">—</div>
+      <p class="muted small">请记下单号，稍后可在「查询进度」查看处理情况</p>
+      <button class="btn primary" id="btnGoTrack">去查询进度</button>
+      <button class="btn text" id="btnAgain">再报一个</button>
+    </div>
+
+    <!-- 报障表单：这一屏只做一件事——把问题提交出去。
+         自查问答不放在这里，避免员工填单前被拦一道；需要时走「常见问题」页签 -->
+    <form class="card" id="reportForm" autocomplete="on">
+      <div class="field">
+        <label>您的姓名 <i>*</i></label>
+        <input id="fContact" name="contact" type="text" placeholder="方便我们联系您" maxlength="20" autocomplete="name" required>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>部门</label>
+          <select id="fDept"></select>
+        </div>
+        <div class="field">
+          <label>手机号</label>
+          <input id="fPhone" name="phone" type="tel" inputmode="numeric" placeholder="选填，便于回电" maxlength="20" autocomplete="tel">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>相关系统</label>
+        <select id="fSystem"></select>
+      </div>
+
+      <div class="field">
+        <label>紧急程度</label>
+        <div class="pri" id="priRow">
+          <button type="button" class="pri-item urgent" data-p="urgent">很急</button>
+          <button type="button" class="pri-item high" data-p="high">较急</button>
+          <button type="button" class="pri-item normal on" data-p="normal">一般</button>
+          <button type="button" class="pri-item low" data-p="low">不急</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>问题描述 <i>*</i></label>
+        <textarea id="fContent" name="content" rows="5" maxlength="500"
+          placeholder="请描述遇到的现象，例如：打开 OA 提示 502，所有人都打不开"></textarea>
+        <div class="counter"><span id="cnt">0</span>/500</div>
+      </div>
+
+      <div class="field">
+        <label>故障截图 <span class="opt">（选填，最多 3 张）</span></label>
+        <div class="shots" id="shots" hidden></div>
+        <div class="shot-actions">
+          <button type="button" class="ghost" id="btnPick">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="m21 16-4.5-4.5L9 19" stroke-linecap="round"/></svg>
+            选择图片
+          </button>
+          <button type="button" class="ghost" id="btnShot">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2"/></svg>
+            拍照
+          </button>
+          <span class="hint" id="shotHint">截图后可直接 Ctrl+V 粘贴（手机可长按粘贴）</span>
+        </div>
+        <input type="file" id="filePick" accept="image/*" multiple hidden>
+        <input type="file" id="fileShot" accept="image/*" capture="environment" hidden>
+      </div>
+
+      <button class="btn primary block" type="submit" id="btnSubmit">提交报障</button>
+      <p class="muted small center-t">提交后 IT 会尽快响应，紧急问题请同时电话联系 IT 值班。</p>
+    </form>
+  </section>
+
+  <!-- ============ 查询进度 ============ -->
+  <section class="panel" data-panel="track" hidden>
+    <form class="card" id="trackForm">
+      <div class="field">
+        <label>报障单号</label>
+        <input id="tNo" type="text" placeholder="如 R202610280001" maxlength="24" autocapitalize="characters">
+      </div>
+      <div class="field">
+        <label>手机号后 4 位</label>
+        <input id="tPhone" type="tel" inputmode="numeric" placeholder="报障时填了手机号则需填写" maxlength="4">
+      </div>
+      <button class="btn primary block" type="submit" id="btnTrack">查询</button>
+    </form>
+
+    <div class="card" id="trackResult" hidden>
+      <div class="r-head">
+        <span class="tag" id="rStatus">处理中</span>
+        <span class="muted small" id="rNo"></span>
+      </div>
+      <div class="r-line"><span>问题</span><b id="rContent">—</b></div>
+      <div class="r-line"><span>系统</span><b id="rSystem">—</b></div>
+      <div class="r-line"><span>提交</span><b id="rHappen">—</b></div>
+      <div class="r-line" id="rFinishLine" hidden><span>完成</span><b id="rFinish">—</b></div>
+
+      <div class="r-result" id="rResultBox" hidden>
+        <div class="muted small">处理结果</div>
+        <p id="rResult"></p>
+      </div>
+
+      <div class="rate" id="rateBox" hidden>
+        <div class="label">本次服务您满意吗？</div>
+        <div class="stars" id="stars">
+          <button type="button" data-s="1" aria-label="1 星">★</button>
+          <button type="button" data-s="2" aria-label="2 星">★</button>
+          <button type="button" data-s="3" aria-label="3 星">★</button>
+          <button type="button" data-s="4" aria-label="4 星">★</button>
+          <button type="button" data-s="5" aria-label="5 星">★</button>
+        </div>
+        <div class="muted small" id="rateText">请选择评分</div>
+        <textarea id="rateComment" rows="2" maxlength="200" placeholder="还有什么想说的？（选填）"></textarea>
+        <button class="btn primary block" id="btnRate">提交评价</button>
+      </div>
+
+      <div class="rated" id="ratedBox" hidden>已评价：<span id="ratedStars"></span></div>
+    </div>
+  </section>
+
+  <!-- ============ 常见问题 ============ -->
+  <section class="panel" data-panel="faq" hidden>
+    <div class="card">
+      <div class="search">
+        <input id="faqKw" type="search" placeholder="搜索关键词，如 VPN、打印机、OA">
+        <button class="btn primary" id="btnFaqSearch">搜索</button>
+      </div>
+      <p class="muted small" id="faqHint"></p>
+    </div>
+    <div id="faqList"></div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <p id="footDuty">如遇紧急故障，请直接电话联系 IT 值班人员</p>
+  <p class="muted small">IT 运维服务台 · 由 锦轩 开发 · <span id="ver">v—</span></p>
+  <p class="muted small copy">© 2026 锦轩 (JinXuan) 保留所有权利</p>
+</footer>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js?v=20261112b"></script>
+</body>
+</html>

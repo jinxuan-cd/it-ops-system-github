@@ -1,0 +1,24 @@
+{
+  "name": "it-ops-system",
+  "version": "1.4.2",
+  "description": "IT 运维工单台账与日报自动管理系统（私有化部署）",
+  "author": {
+    "name": "锦轩",
+    "email": "2686389727@qq.com"
+  },
+  "contributors": [
+    "锦轩 (JinXuan) <2686389727@qq.com>"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "copyright": "Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "start:backend": "npm --prefix backend start",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
+  }
+}

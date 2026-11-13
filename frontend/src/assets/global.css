@@ -1,0 +1,148 @@
+/*!
+ * 全局样式与主题变量 —— IT 运维工单台账与日报自动管理系统
+ * 定义主题色/背景/边框等 CSS 变量，明暗主题通过覆盖这些变量实现
+ *
+ * 作者：锦轩 (JinXuan) <2686389727@qq.com>
+ * 创建：2026-10-29　　版本：1.2.2
+ * Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.
+ * 许可：个人自用及 ≤10 人、年营收 ≤200 万元的小团队内部使用免费；
+ *       其余商业使用需向作者购买授权，详见根目录 LICENSE 与 NOTICE。
+ */
+:root {
+  --it-primary: #2f6fed;
+  --it-primary-light: #eaf1ff;
+  --it-bg: #f5f7fa;
+  --it-card: #ffffff;
+  --it-border: #e6e9ef;
+  --it-text: #2b3245;
+  --it-text-sub: #8a93a6;
+  --it-success: #18a058;
+  --it-warning: #f0a020;
+  --it-danger: #e54545;
+  --it-sidebar-bg: #1f2a44;
+  --it-sidebar-bg-2: #18223a;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--it-bg);
+  color: var(--it-text);
+  font-size: 14px;
+}
+
+.it-page {
+  padding: 18px 20px;
+}
+
+.it-card {
+  background: var(--it-card);
+  border: 1px solid var(--it-border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: 0 2px 10px rgba(31, 41, 55, 0.04);
+}
+
+.it-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.it-section-title::before {
+  content: "";
+  width: 4px;
+  height: 15px;
+  background: var(--it-primary);
+  border-radius: 2px;
+}
+
+.it-flex { display: flex; }
+.it-between { display: flex; justify-content: space-between; align-items: center; }
+.it-wrap { flex-wrap: wrap; }
+.it-gap { gap: 12px; }
+
+/* 滚动条美化 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d4d9e3; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #b9c0cf; }
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .it-page { padding: 12px; }
+  .it-hide-mobile { display: none !important; }
+}
+
+/* 深色模式：覆盖系统自定义配色（Element Plus 官方暗色由 dark/css-vars 处理） */
+.dark {
+  --it-bg: #161a23;
+  --it-card: #1f2530;
+  --it-border: #2e3644;
+  --it-text: #e6e9f0;
+  --it-text-sub: #93a0b5;
+  --it-primary-light: rgba(47, 111, 237, 0.18);
+}
+.dark body { background: var(--it-bg); color: var(--it-text); }
+.dark .it-card { background: var(--it-card); border-color: var(--it-border); }
+.dark .header { background: var(--it-card); border-color: var(--it-border); }
+.dark .header .sys-name { color: var(--it-text); }
+.dark .header .user-name { color: var(--it-text); }
+.dark .header .collapse-btn { color: #c5cde0; }
+.dark .main { background: var(--it-bg); }
+
+/* ================= 移动端适配（手机浏览器 / 平板） ================= */
+/* 宽屏右侧有浮动待办面板（240px），统一留出安全区，避免内容被压住 */
+@media (min-width: 1200px) {
+  .it-page { padding-right: 268px; }
+}
+/* 中屏：待办面板自动收起成 44px 图标，这里留一点右侧安全区，避免遮住分页按钮 */
+@media (min-width: 821px) and (max-width: 1199px) {
+  .it-page { padding-right: 66px; }
+}
+
+@media (max-width: 820px) {
+  .it-page { padding: 12px 10px 28px !important; }
+  .it-card { padding: 12px; border-radius: 8px; }
+  .it-section-title { font-size: 14px; margin-bottom: 10px; }
+
+  /* 弹窗 / 抽屉占满宽度，避免小屏挤压 */
+  .el-dialog { width: 92vw !important; margin-top: 5vh !important; }
+  .el-drawer.rtl, .el-drawer.ltr { width: 92vw !important; }
+  /* 侧栏抽屉保持固定宽度，不被上面的规则放大（320px 在 390 屏上约占 82%，菜单更好点） */
+  .el-drawer.m-drawer { width: min(320px, 86vw) !important; }
+  .el-message-box { width: 90vw !important; }
+  .el-dialog__body { padding: 14px 12px; }
+
+  /* 行内筛选表单改成竖排，每项占满一行 */
+  .el-form--inline .el-form-item { display: flex; margin-right: 0; margin-bottom: 10px; width: 100%; }
+  .el-form--inline .el-form-item__content { flex: 1; min-width: 0; }
+  .el-form--inline .el-form-item__content > .el-input,
+  .el-form--inline .el-form-item__content > .el-select,
+  .el-form--inline .el-form-item__content > .el-date-editor { width: 100% !important; }
+
+  /* 表格可以横向滑动，操作列仍固定 */
+  .el-table { font-size: 12px; }
+  .el-table th, .el-table td { padding: 6px 0; }
+  .el-pagination { justify-content: center; }
+
+  /* 描述列表在窄屏改成单列 */
+  .el-descriptions__body .el-descriptions__table { table-layout: auto; }
+
+  /* 看板指标卡两列排布已经由 el-col xs=12 处理，这里压缩字号 */
+  .metric-card .m-val { font-size: 22px; }
+}
+
+@media (max-width: 420px) {
+  .it-page { padding: 10px 8px 24px !important; }
+  .el-button + .el-button { margin-left: 6px; }
+  .metric-card .m-val { font-size: 20px; }
+}

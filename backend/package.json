@@ -1,0 +1,31 @@
+{
+  "name": "it-ops-backend",
+  "version": "1.4.0",
+  "description": "IT 运维工单系统后端 API",
+  "author": {
+    "name": "锦轩",
+    "email": "2686389727@qq.com"
+  },
+  "license": "SEE LICENSE IN ../LICENSE",
+  "copyright": "Copyright (c) 2026 锦轩 (JinXuan). All rights reserved.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "archiver": "^7.0.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.8.0",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.11.0",
+    "pdf-parse": "^1.1.1"
+  }
+}
